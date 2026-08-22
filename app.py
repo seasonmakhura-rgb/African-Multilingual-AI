@@ -2,7 +2,7 @@ import os
 import pickle
 import numpy as np
 import streamlit as st
-from keras.models import load_model
+import tf_keras as keras
 from keras.preprocessing.sequence import pad_sequences
 from google import genai
 
@@ -12,7 +12,7 @@ st.set_page_config(page_title="African Multilingual AI Assistant", page_icon="ðŸ
 # Load Classifier Artifacts
 @st.cache_resource
 def load_artifacts():
-    model = load_model('african_lang_classifier.keras')
+    model = keras.models.load_model('african_lang_classifier.keras')
     with open('word_tokenizer.pkl', 'rb') as f:
         tokenizer = pickle.load(f)
     with open('label_encoder.pkl', 'rb') as f:
