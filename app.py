@@ -10,6 +10,7 @@ from streamlit_mic_recorder import speech_to_text
 from gtts import gTTS
 import faiss
 from documents import KNOWLEDGE_DOCUMENTS
+from guardrails import validate_user_input
 
 # Page Config
 st.set_page_config(page_title="African Multilingual RAG AI", page_icon="🌍")
@@ -63,7 +64,7 @@ client = genai.Client(api_key=api_key)
 
 # App UI
 st.title("🌍 African Multilingual AI Assistant (RAG Enabled)")
-st.write("Integrates custom BiLSTM language classification with FAISS vector retrieval and Gemini LLM synthesis.")
+st.write("Integrates custom BiLSTM language classification with FAISS vector retrieval, local guardrails, and Gemini LLM synthesis.")
 
 # Sidebar Controls
 with st.sidebar:
@@ -77,7 +78,7 @@ with st.sidebar:
         st.session_state.messages = []
         st.rerun()
 
-# Render History (with persistent audio players)
+# Render History
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
@@ -109,50 +110,56 @@ if st.button("Send Request", type="primary"):
     if not user_input.strip():
         st.warning("Please provide a text input or speak into the microphone.")
     else:
-        st.session_state.messages.append({"role": "user", "content": user_input})
+        # Step 0: Execute Local Guardrails Check
+        is_safe, guardrail_msg = validate_user_input(user_input)
         
-        with st.status("Executing RAG & Multi-Turn Pipeline...", expanded=True) as status:
-            # Step 1: BiLSTM Language Detection
-            st.write("🧠 Classifying user language with BiLSTM model...")
-            seq = tokenizer.texts_to_sequences([user_input])
-            padded = pad_sequences(seq, maxlen=50)
-            preds = model.predict(padded)
-            detected_lang = label_encoder.inverse_transform([np.argmax(preds)])[0]
-            confidence = float(np.max(preds)) * 100
+        if not is_safe:
+            st.error(f"🚫 **Input Blocked by System Guardrails**: {guardrail_msg}")
+        else:
+            st.session_state.messages.append({"role": "user", "content": user_input})
+            
+            with st.status("Executing Multimodal & RAG Pipeline...", expanded=True) as status:
+                # Step 1: BiLSTM Language Detection
+                st.write("🧠 Classifying user language with BiLSTM model...")
+                seq = tokenizer.texts_to_sequences([user_input])
+                padded = pad_sequences(seq, maxlen=50)
+                preds = model.predict(padded)
+                detected_lang = label_encoder.inverse_transform([np.argmax(preds)])[0]
+                confidence = float(np.max(preds)) * 100
 
-            # Step 2: RAG Retrieval via FAISS with Zero-Vector Guard
-            st.write("🔍 Querying FAISS Vector Database for context...")
-            q_vec = np.zeros(embedding_dim, dtype='float32')
-            if seq[0]:
-                for idx in seq[0][:embedding_dim]:
-                    q_vec[idx % embedding_dim] += 1.0
+                # Step 2: RAG Retrieval via FAISS
+                st.write("🔍 Querying FAISS Vector Database for context...")
+                q_vec = np.zeros(embedding_dim, dtype='float32')
+                if seq[0]:
+                    for idx in seq[0][:embedding_dim]:
+                        q_vec[idx % embedding_dim] += 1.0
 
-            if np.sum(q_vec) > 0:
-                q_matrix = np.array([q_vec]).astype('float32')
-                faiss.normalize_L2(q_matrix)
-                distances, indices = faiss_index.search(q_matrix, k=1)
-                similarity_score = float(distances[0][0])
-                
-                SIMILARITY_THRESHOLD = 0.35
-                if similarity_score >= SIMILARITY_THRESHOLD:
-                    retrieved_doc = KNOWLEDGE_DOCUMENTS[indices[0][0]]
-                    rag_context = retrieved_doc["text"]
-                    doc_title = retrieved_doc["title"]
+                if np.sum(q_vec) > 0:
+                    q_matrix = np.array([q_vec]).astype('float32')
+                    faiss.normalize_L2(q_matrix)
+                    distances, indices = faiss_index.search(q_matrix, k=1)
+                    similarity_score = float(distances[0][0])
+                    
+                    SIMILARITY_THRESHOLD = 0.35
+                    if similarity_score >= SIMILARITY_THRESHOLD:
+                        retrieved_doc = KNOWLEDGE_DOCUMENTS[indices[0][0]]
+                        rag_context = retrieved_doc["text"]
+                        doc_title = retrieved_doc["title"]
+                    else:
+                        rag_context = "No relevant document found."
+                        doc_title = "None (Low Similarity)"
                 else:
                     rag_context = "No relevant document found."
-                    doc_title = "None (Low Similarity)"
-            else:
-                rag_context = "No relevant document found."
-                doc_title = "None (No Match)"
+                    doc_title = "None (No Match)"
 
-            st.write(f"📄 Retrieved Document: **{doc_title}**")
+                st.write(f"📄 Retrieved Document: **{doc_title}**")
 
-            # Step 3: System Prompt Construction
-            history_context = ""
-            for past_msg in st.session_state.messages[:-1]:
-                history_context += f"{past_msg['role'].upper()}: {past_msg['content']}\n"
+                # Step 3: System Prompt Construction
+                history_context = ""
+                for past_msg in st.session_state.messages[:-1]:
+                    history_context += f"{past_msg['role'].upper()}: {past_msg['content']}\n"
 
-            prompt_sent = f"""SYSTEM INSTRUCTION:
+                prompt_sent = f"""SYSTEM INSTRUCTION:
 You are an expert multilingual AI assistant.
 Detected Input Language from User: {detected_lang} (Confidence: {confidence:.1f}%).
 TARGET OUTPUT LANGUAGE ENFORCEMENT: Regardless of the input language, you MUST compose your entire response strictly in {target_language}.
@@ -166,38 +173,41 @@ CONVERSATION HISTORY:
 CURRENT USER QUERY: {user_input}
 RESPONSE ({target_language}):"""
 
-            # Step 4: Call Gemini API
-            st.write("🚀 Generating grounded AI response...")
-            try:
-                response = client.models.generate_content(
-                    model='gemini-3.6-flash',
-                    contents=prompt_sent
-                )
-                ai_output = response.text
-            except Exception as e:
-                ai_output = f"Error: {str(e)}"
+                # Step 4: Call Gemini API (with gemini-2.5-flash)
+                st.write("🚀 Generating grounded AI response...")
+                try:
+                    response = client.models.generate_content(
+                        model='gemini-2.5-flash',
+                        contents=prompt_sent
+                    )
+                    ai_output = response.text
+                except Exception as e:
+                    if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
+                        ai_output = "⚠️ **Free-tier API limit reached.** Please wait a short moment and try again."
+                    else:
+                        ai_output = f"Error: {str(e)}"
 
-            # Step 5: Generate Speech & Convert to Bytes
-            st.write("🔊 Synthesizing speech output...")
-            audio_bytes = None
-            selected_tts_lang = TTS_LANG_MAP.get(target_language, 'en')
-            try:
-                tts = gTTS(text=ai_output, lang=selected_tts_lang)
-                fp = io.BytesIO()
-                tts.write_to_fp(fp)
-                audio_bytes = fp.getvalue()
-            except Exception:
-                pass
+                # Step 5: Generate Speech & Convert to Bytes
+                st.write("🔊 Synthesizing speech output...")
+                audio_bytes = None
+                selected_tts_lang = TTS_LANG_MAP.get(target_language, 'en')
+                try:
+                    tts = gTTS(text=ai_output, lang=selected_tts_lang)
+                    fp = io.BytesIO()
+                    tts.write_to_fp(fp)
+                    audio_bytes = fp.getvalue()
+                except Exception:
+                    pass
 
-            status.update(label="RAG Pipeline Execution Complete!", state="complete", expanded=False)
+                status.update(label="Pipeline Execution Complete!", state="complete", expanded=False)
 
-        # Store message, metadata AND audio bytes together in state
-        metadata = f"🧠 Detected **{detected_lang}** ({confidence:.1f}%) | 📄 Knowledge Context: *{doc_title}*"
-        st.session_state.messages.append({
-            "role": "assistant", 
-            "content": ai_output, 
-            "metadata": metadata,
-            "audio": audio_bytes
-        })
+            # Store message, metadata AND audio bytes together in state
+            metadata = f"🧠 Detected **{detected_lang}** ({confidence:.1f}%) | 📄 Knowledge Context: *{doc_title}*"
+            st.session_state.messages.append({
+                "role": "assistant", 
+                "content": ai_output, 
+                "metadata": metadata,
+                "audio": audio_bytes
+            })
 
-        st.rerun()
+            st.rerun()
