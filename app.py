@@ -18,6 +18,10 @@ from guardrails import validate_user_input
 # Page Config
 st.set_page_config(page_title="African Multilingual RAG AI", page_icon="🌍")
 
+# Ensure persistent storage directory exists for saved chats
+SAVES_DIR = "saved_chats"
+os.makedirs(SAVES_DIR, exist_ok=True)
+
 # Dynamic TTS Language Mapping
 TTS_LANG_MAP = {
     'Portuguese': 'pt',
@@ -88,7 +92,7 @@ client = genai.Client(api_key=api_key)
 
 # App UI
 st.title("🌍 African Multilingual AI Assistant (RAG Enabled)")
-st.write("Integrates BiLSTM language classification, dynamic FAISS knowledge ingestion, guardrails, and telemetry.")
+st.write("Integrates BiLSTM language classification, dynamic FAISS knowledge ingestion, guardrails, and persistent chat memory.")
 
 # Sidebar Controls & Dynamic Uploads
 with st.sidebar:
@@ -99,6 +103,44 @@ with st.sidebar:
         index=sorted(label_encoder.classes_).index("Portuguese") if "Portuguese" in label_encoder.classes_ else 0
     )
     
+    st.markdown("---")
+    st.header("💾 Session Memory & History")
+    
+    # Save Current Session
+    session_name = st.text_input("Session Name", value="Session_1")
+    if st.button("💾 Save Current Chat Session"):
+        if st.session_state.messages:
+            save_payload = {
+                "messages": [
+                    {k: v for k, v in msg.items() if k != "audio"} 
+                    for msg in st.session_state.messages
+                ],
+                "analytics": st.session_state.analytics
+            }
+            file_path = os.path.join(SAVES_DIR, f"{session_name.strip()}.json")
+            with open(file_path, "w", encoding="utf-8") as f:
+                json.dump(save_payload, f, indent=2)
+            st.success(f"Session saved as **{session_name}.json**!")
+            st.rerun()
+        else:
+            st.warning("No messages to save yet.")
+
+    # Load Saved Session
+    saved_files = [f.replace(".json", "") for f in os.listdir(SAVES_DIR) if f.endswith(".json")]
+    if saved_files:
+        selected_file = st.selectbox("Load Saved History", ["-- Select Session --"] + saved_files)
+        if st.button("📂 Load Selected Session"):
+            if selected_file != "-- Select Session --":
+                file_path = os.path.join(SAVES_DIR, f"{selected_file}.json")
+                with open(file_path, "r", encoding="utf-8") as f:
+                    loaded_data = json.load(f)
+                st.session_state.messages = loaded_data.get("messages", [])
+                st.session_state.analytics = loaded_data.get("analytics", st.session_state.analytics)
+                st.success(f"Loaded **{selected_file}**!")
+                st.rerun()
+    else:
+        st.caption("No saved sessions found on disk.")
+
     st.markdown("---")
     st.header("📁 Dynamic Knowledge Ingestion")
     
@@ -133,9 +175,8 @@ with st.sidebar:
         help="Restrict vector retrieval to specific knowledge domains."
     )
     
-    if st.button("🗑️ Clear Chat & Reset Custom Index"):
+    if st.button("🗑️ Clear Active Chat"):
         st.session_state.messages = []
-        st.session_state.custom_documents = []
         st.session_state.analytics = {
             "bilstm_latencies": [],
             "faiss_latencies": [],
