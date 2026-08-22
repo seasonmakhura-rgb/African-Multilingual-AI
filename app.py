@@ -1,5 +1,6 @@
 import os
 import io
+import time
 import pickle
 import numpy as np
 import streamlit as st
@@ -24,9 +25,17 @@ TTS_LANG_MAP = {
     'Spanish': 'es'
 }
 
-# Initialize Chat Memory
+# Initialize Chat Memory & Performance Metrics State
 if "messages" not in st.session_state:
     st.session_state.messages = []
+
+if "analytics" not in st.session_state:
+    st.session_state.analytics = {
+        "bilstm_latencies": [],
+        "faiss_latencies": [],
+        "total_requests": 0,
+        "blocked_requests": 0
+    }
 
 # Load Classifier Artifacts & Build FAISS RAG Index
 @st.cache_resource
@@ -64,9 +73,9 @@ client = genai.Client(api_key=api_key)
 
 # App UI
 st.title("🌍 African Multilingual AI Assistant (RAG Enabled)")
-st.write("Integrates custom BiLSTM language classification with FAISS vector retrieval, local guardrails, and Gemini LLM synthesis.")
+st.write("Integrates BiLSTM language classification, FAISS retrieval, safety guardrails, and latency monitoring.")
 
-# Sidebar Controls
+# Sidebar Controls & Analytics Monitor
 with st.sidebar:
     st.header("⚙️ Settings & Controls")
     target_language = st.selectbox(
@@ -74,9 +83,42 @@ with st.sidebar:
         sorted(label_encoder.classes_), 
         index=sorted(label_encoder.classes_).index("Portuguese") if "Portuguese" in label_encoder.classes_ else 0
     )
+    
     if st.button("🗑️ Clear Chat History"):
         st.session_state.messages = []
+        st.session_state.analytics = {
+            "bilstm_latencies": [],
+            "faiss_latencies": [],
+            "total_requests": 0,
+            "blocked_requests": 0
+        }
         st.rerun()
+
+    st.markdown("---")
+    st.header("📊 Performance Analytics")
+    
+    total_reqs = st.session_state.analytics["total_requests"]
+    blocked_reqs = st.session_state.analytics["blocked_requests"]
+    
+    col1, col2 = st.columns(2)
+    col1.metric("Total Turns", total_reqs)
+    col2.metric("Blocked", blocked_reqs)
+
+    b_latencies = st.session_state.analytics["bilstm_latencies"]
+    f_latencies = st.session_state.analytics["faiss_latencies"]
+
+    if b_latencies:
+        avg_bilstm = float(np.mean(b_latencies))
+        avg_faiss = float(np.mean(f_latencies))
+        st.write(f"⚡ **Avg BiLSTM Latency:** `{avg_bilstm:.2f} ms`")
+        st.write(f"🔍 **Avg FAISS Latency:** `{avg_faiss:.2f} ms`")
+        
+        # Plot latency trend
+        st.caption("Inference Latency Trend (ms)")
+        st.line_chart({
+            "BiLSTM (ms)": b_latencies,
+            "FAISS (ms)": f_latencies
+        })
 
 # Render History
 for msg in st.session_state.messages:
@@ -110,25 +152,35 @@ if st.button("Send Request", type="primary"):
     if not user_input.strip():
         st.warning("Please provide a text input or speak into the microphone.")
     else:
+        st.session_state.analytics["total_requests"] += 1
+        
         # Step 0: Execute Local Guardrails Check
         is_safe, guardrail_msg = validate_user_input(user_input)
         
         if not is_safe:
+            st.session_state.analytics["blocked_requests"] += 1
             st.error(f"🚫 **Input Blocked by System Guardrails**: {guardrail_msg}")
         else:
             st.session_state.messages.append({"role": "user", "content": user_input})
             
             with st.status("Executing Multimodal & RAG Pipeline...", expanded=True) as status:
-                # Step 1: BiLSTM Language Detection
+                # Step 1: BiLSTM Language Detection + Benchmark
                 st.write("🧠 Classifying user language with BiLSTM model...")
+                t0_bilstm = time.perf_counter()
+                
                 seq = tokenizer.texts_to_sequences([user_input])
                 padded = pad_sequences(seq, maxlen=50)
                 preds = model.predict(padded)
                 detected_lang = label_encoder.inverse_transform([np.argmax(preds)])[0]
                 confidence = float(np.max(preds)) * 100
+                
+                bilstm_latency_ms = (time.perf_counter() - t0_bilstm) * 1000
+                st.session_state.analytics["bilstm_latencies"].append(round(bilstm_latency_ms, 2))
 
-                # Step 2: RAG Retrieval via FAISS
+                # Step 2: RAG Retrieval via FAISS + Benchmark
                 st.write("🔍 Querying FAISS Vector Database for context...")
+                t0_faiss = time.perf_counter()
+                
                 q_vec = np.zeros(embedding_dim, dtype='float32')
                 if seq[0]:
                     for idx in seq[0][:embedding_dim]:
@@ -152,6 +204,9 @@ if st.button("Send Request", type="primary"):
                     rag_context = "No relevant document found."
                     doc_title = "None (No Match)"
 
+                faiss_latency_ms = (time.perf_counter() - t0_faiss) * 1000
+                st.session_state.analytics["faiss_latencies"].append(round(faiss_latency_ms, 2))
+
                 st.write(f"📄 Retrieved Document: **{doc_title}**")
 
                 # Step 3: System Prompt Construction
@@ -173,7 +228,7 @@ CONVERSATION HISTORY:
 CURRENT USER QUERY: {user_input}
 RESPONSE ({target_language}):"""
 
-                # Step 4: Call Gemini API (with gemini-2.5-flash)
+                # Step 4: Call Gemini API (gemini-2.5-flash)
                 st.write("🚀 Generating grounded AI response...")
                 try:
                     response = client.models.generate_content(
@@ -187,7 +242,7 @@ RESPONSE ({target_language}):"""
                     else:
                         ai_output = f"Error: {str(e)}"
 
-                # Step 5: Generate Speech & Convert to Bytes
+                # Step 5: Speech Synthesis
                 st.write("🔊 Synthesizing speech output...")
                 audio_bytes = None
                 selected_tts_lang = TTS_LANG_MAP.get(target_language, 'en')
@@ -201,8 +256,8 @@ RESPONSE ({target_language}):"""
 
                 status.update(label="Pipeline Execution Complete!", state="complete", expanded=False)
 
-            # Store message, metadata AND audio bytes together in state
-            metadata = f"🧠 Detected **{detected_lang}** ({confidence:.1f}%) | 📄 Knowledge Context: *{doc_title}*"
+            # Store metadata with performance metrics
+            metadata = f"🧠 Detected **{detected_lang}** ({confidence:.1f}%) | 📄 Knowledge Context: *{doc_title}* | ⏱️ BiLSTM: `{bilstm_latency_ms:.1f}ms` | FAISS: `{faiss_latency_ms:.1f}ms`"
             st.session_state.messages.append({
                 "role": "assistant", 
                 "content": ai_output, 
