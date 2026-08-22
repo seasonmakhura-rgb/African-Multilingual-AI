@@ -25,7 +25,7 @@ TTS_LANG_MAP = {
     'Spanish': 'es'
 }
 
-# Initialize Chat Memory & Performance Metrics State
+# Initialize Memory & Analytics
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
@@ -37,6 +37,9 @@ if "analytics" not in st.session_state:
         "blocked_requests": 0
     }
 
+# Extract unique document categories dynamically
+ALL_CATEGORIES = sorted(list(set(doc["category"] for doc in KNOWLEDGE_DOCUMENTS)))
+
 # Load Classifier Artifacts & Build FAISS RAG Index
 @st.cache_resource
 def load_system_resources():
@@ -46,11 +49,18 @@ def load_system_resources():
     with open('label_encoder.pkl', 'rb') as f:
         label_encoder = pickle.load(f)
 
-    # Build Lightweight FAISS Vector Index
-    embedding_dim = 128
+    return model, tokenizer, label_encoder
+
+model, tokenizer, label_encoder = load_system_resources()
+
+# Helper function to dynamically build FAISS index based on active category filters
+def build_faiss_index_for_docs(docs, tokenizer, embedding_dim=128):
+    if not docs:
+        return None, []
+    
     np.random.seed(42)
     doc_vectors = []
-    for doc in KNOWLEDGE_DOCUMENTS:
+    for doc in docs:
         seq = tokenizer.texts_to_sequences([doc['text']])
         vec = np.zeros(embedding_dim, dtype='float32')
         if seq[0]:
@@ -62,10 +72,7 @@ def load_system_resources():
     faiss.normalize_L2(doc_matrix)
     index = faiss.IndexFlatIP(embedding_dim)
     index.add(doc_matrix)
-
-    return model, tokenizer, label_encoder, index, embedding_dim
-
-model, tokenizer, label_encoder, faiss_index, embedding_dim = load_system_resources()
+    return index, docs
 
 # Gemini API Client setup
 api_key = st.secrets.get("GEMINI_API_KEY", os.environ.get("GEMINI_API_KEY"))
@@ -73,7 +80,7 @@ client = genai.Client(api_key=api_key)
 
 # App UI
 st.title("🌍 African Multilingual AI Assistant (RAG Enabled)")
-st.write("Integrates BiLSTM language classification, FAISS retrieval, safety guardrails, and latency monitoring.")
+st.write("Integrates BiLSTM language classification, metadata-filtered FAISS RAG, guardrails, and telemetry.")
 
 # Sidebar Controls & Analytics Monitor
 with st.sidebar:
@@ -82,6 +89,14 @@ with st.sidebar:
         "Select Target Output Language", 
         sorted(label_encoder.classes_), 
         index=sorted(label_encoder.classes_).index("Portuguese") if "Portuguese" in label_encoder.classes_ else 0
+    )
+    
+    # RAG Category Filter
+    selected_categories = st.multiselect(
+        "Filter RAG Knowledge Categories",
+        options=ALL_CATEGORIES,
+        default=ALL_CATEGORIES,
+        help="Restrict vector retrieval to specific knowledge domains."
     )
     
     if st.button("🗑️ Clear Chat History"):
@@ -112,8 +127,6 @@ with st.sidebar:
         avg_faiss = float(np.mean(f_latencies))
         st.write(f"⚡ **Avg BiLSTM Latency:** `{avg_bilstm:.2f} ms`")
         st.write(f"🔍 **Avg FAISS Latency:** `{avg_faiss:.2f} ms`")
-        
-        # Plot latency trend
         st.caption("Inference Latency Trend (ms)")
         st.line_chart({
             "BiLSTM (ms)": b_latencies,
@@ -164,7 +177,7 @@ if st.button("Send Request", type="primary"):
             st.session_state.messages.append({"role": "user", "content": user_input})
             
             with st.status("Executing Multimodal & RAG Pipeline...", expanded=True) as status:
-                # Step 1: BiLSTM Language Detection + Benchmark
+                # Step 1: BiLSTM Language Detection
                 st.write("🧠 Classifying user language with BiLSTM model...")
                 t0_bilstm = time.perf_counter()
                 
@@ -177,37 +190,46 @@ if st.button("Send Request", type="primary"):
                 bilstm_latency_ms = (time.perf_counter() - t0_bilstm) * 1000
                 st.session_state.analytics["bilstm_latencies"].append(round(bilstm_latency_ms, 2))
 
-                # Step 2: RAG Retrieval via FAISS + Benchmark
-                st.write("🔍 Querying FAISS Vector Database for context...")
+                # Step 2: RAG Retrieval via Filtered FAISS Index
+                st.write("🔍 Filtering documents & querying FAISS Vector Database...")
                 t0_faiss = time.perf_counter()
                 
-                q_vec = np.zeros(embedding_dim, dtype='float32')
-                if seq[0]:
-                    for idx in seq[0][:embedding_dim]:
-                        q_vec[idx % embedding_dim] += 1.0
+                # Filter documents by selected categories
+                filtered_docs = [doc for doc in KNOWLEDGE_DOCUMENTS if doc["category"] in selected_categories]
+                embedding_dim = 128
+                active_faiss_index, active_docs = build_faiss_index_for_docs(filtered_docs, tokenizer, embedding_dim)
 
-                if np.sum(q_vec) > 0:
-                    q_matrix = np.array([q_vec]).astype('float32')
-                    faiss.normalize_L2(q_matrix)
-                    distances, indices = faiss_index.search(q_matrix, k=1)
-                    similarity_score = float(distances[0][0])
-                    
-                    SIMILARITY_THRESHOLD = 0.35
-                    if similarity_score >= SIMILARITY_THRESHOLD:
-                        retrieved_doc = KNOWLEDGE_DOCUMENTS[indices[0][0]]
-                        rag_context = retrieved_doc["text"]
-                        doc_title = retrieved_doc["title"]
+                rag_context = "No relevant document found."
+                doc_title = "None"
+                
+                if active_faiss_index is not None:
+                    q_vec = np.zeros(embedding_dim, dtype='float32')
+                    if seq[0]:
+                        for idx in seq[0][:embedding_dim]:
+                            q_vec[idx % embedding_dim] += 1.0
+
+                    if np.sum(q_vec) > 0:
+                        q_matrix = np.array([q_vec]).astype('float32')
+                        faiss.normalize_L2(q_matrix)
+                        distances, indices = active_faiss_index.search(q_matrix, k=1)
+                        similarity_score = float(distances[0][0])
+                        
+                        SIMILARITY_THRESHOLD = 0.35
+                        if similarity_score >= SIMILARITY_THRESHOLD:
+                            retrieved_doc = active_docs[indices[0][0]]
+                            rag_context = retrieved_doc["text"]
+                            doc_title = f"[{retrieved_doc['category']}] {retrieved_doc['title']}"
+                        else:
+                            doc_title = "None (Low Similarity)"
                     else:
-                        rag_context = "No relevant document found."
-                        doc_title = "None (Low Similarity)"
+                        doc_title = "None (No Match)"
                 else:
-                    rag_context = "No relevant document found."
-                    doc_title = "None (No Match)"
+                    doc_title = "None (No Categories Selected)"
 
                 faiss_latency_ms = (time.perf_counter() - t0_faiss) * 1000
                 st.session_state.analytics["faiss_latencies"].append(round(faiss_latency_ms, 2))
 
-                st.write(f"📄 Retrieved Document: **{doc_title}**")
+                st.write(f"📄 Retrieved Context: **{doc_title}**")
 
                 # Step 3: System Prompt Construction
                 history_context = ""
@@ -256,8 +278,8 @@ RESPONSE ({target_language}):"""
 
                 status.update(label="Pipeline Execution Complete!", state="complete", expanded=False)
 
-            # Store metadata with performance metrics
-            metadata = f"🧠 Detected **{detected_lang}** ({confidence:.1f}%) | 📄 Knowledge Context: *{doc_title}* | ⏱️ BiLSTM: `{bilstm_latency_ms:.1f}ms` | FAISS: `{faiss_latency_ms:.1f}ms`"
+            # Store metadata
+            metadata = f"🧠 Detected **{detected_lang}** ({confidence:.1f}%) | 📄 Context: *{doc_title}* | ⏱️ BiLSTM: `{bilstm_latency_ms:.1f}ms` | FAISS: `{faiss_latency_ms:.1f}ms`"
             st.session_state.messages.append({
                 "role": "assistant", 
                 "content": ai_output, 
