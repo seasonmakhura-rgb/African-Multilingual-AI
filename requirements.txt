@@ -4,3 +4,4 @@ tensorflow-cpu
 numpy
 streamlit-mic-recorder
 gTTS
+faiss-cpu
