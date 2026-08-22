@@ -9,6 +9,7 @@ import streamlit as st
 import tensorflow as tf
 from tensorflow.keras.preprocessing.sequence import pad_sequences
 from google import genai
+from google.genai import types
 from gtts import gTTS
 import faiss
 from PIL import Image
@@ -335,10 +336,18 @@ with input_col3:
         st.session_state["last_audio"] = recorded_audio.name
         with st.spinner("Transcribing spoken audio with Gemini..."):
             audio_bytes = recorded_audio.read()
+            mime_type = getattr(recorded_audio, "type", "audio/wav") or "audio/wav"
+            
+            # Format audio byte stream into Google GenAI Part
+            audio_part = types.Part.from_bytes(
+                data=audio_bytes,
+                mime_type=mime_type
+            )
+            
             stt_response = client.models.generate_content(
                 model='gemini-2.5-flash',
                 contents=[
-                    {"mime_type": "audio/wav", "data": audio_bytes},
+                    audio_part,
                     "Transcribe the spoken audio into text accurately without adding explanations or extra output."
                 ]
             )
