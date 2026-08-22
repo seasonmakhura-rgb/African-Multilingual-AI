@@ -25,7 +25,7 @@ TTS_LANG_MAP = {
     'Spanish': 'es'
 }
 
-# Initialize Memory & Analytics
+# Initialize Memory, Analytics, & Dynamic Knowledge Base State
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
@@ -37,10 +37,10 @@ if "analytics" not in st.session_state:
         "blocked_requests": 0
     }
 
-# Extract unique document categories dynamically
-ALL_CATEGORIES = sorted(list(set(doc["category"] for doc in KNOWLEDGE_DOCUMENTS)))
+if "custom_documents" not in st.session_state:
+    st.session_state.custom_documents = []
 
-# Load Classifier Artifacts & Build FAISS RAG Index
+# Load Classifier Artifacts
 @st.cache_resource
 def load_system_resources():
     model = tf.keras.models.load_model('african_lang_classifier.keras')
@@ -53,7 +53,7 @@ def load_system_resources():
 
 model, tokenizer, label_encoder = load_system_resources()
 
-# Helper function to dynamically build FAISS index based on active category filters
+# Helper function to dynamically build FAISS index based on active category filters and uploads
 def build_faiss_index_for_docs(docs, tokenizer, embedding_dim=128):
     if not docs:
         return None, []
@@ -74,15 +74,21 @@ def build_faiss_index_for_docs(docs, tokenizer, embedding_dim=128):
     index.add(doc_matrix)
     return index, docs
 
+# Combine static documents with dynamic custom uploads
+all_active_documents = KNOWLEDGE_DOCUMENTS + st.session_state.custom_documents
+
+# Extract unique document categories dynamically
+ALL_CATEGORIES = sorted(list(set(doc["category"] for doc in all_active_documents)))
+
 # Gemini API Client setup
 api_key = st.secrets.get("GEMINI_API_KEY", os.environ.get("GEMINI_API_KEY"))
 client = genai.Client(api_key=api_key)
 
 # App UI
 st.title("🌍 African Multilingual AI Assistant (RAG Enabled)")
-st.write("Integrates BiLSTM language classification, metadata-filtered FAISS RAG, guardrails, and telemetry.")
+st.write("Integrates BiLSTM language classification, dynamic FAISS knowledge ingestion, guardrails, and telemetry.")
 
-# Sidebar Controls & Analytics Monitor
+# Sidebar Controls & Dynamic Uploads
 with st.sidebar:
     st.header("⚙️ Settings & Controls")
     target_language = st.selectbox(
@@ -91,6 +97,32 @@ with st.sidebar:
         index=sorted(label_encoder.classes_).index("Portuguese") if "Portuguese" in label_encoder.classes_ else 0
     )
     
+    st.markdown("---")
+    st.header("📁 Dynamic Knowledge Ingestion")
+    
+    # Custom File Uploader for FAISS RAG
+    uploaded_file = st.file_uploader("Upload `.txt` document to FAISS", type=["txt"])
+    upload_category = st.text_input("Assign Category for Upload", value="Custom Knowledge")
+    
+    if st.button("📥 Index Document into FAISS"):
+        if uploaded_file is not None:
+            file_contents = uploaded_file.read().decode("utf-8").strip()
+            if file_contents:
+                new_doc = {
+                    "id": len(all_active_documents) + 1,
+                    "title": uploaded_file.name,
+                    "category": upload_category.strip() if upload_category.strip() else "Custom Knowledge",
+                    "text": file_contents
+                }
+                st.session_state.custom_documents.append(new_doc)
+                st.success(f"Indexed **{uploaded_file.name}** into FAISS!")
+                st.rerun()
+            else:
+                st.warning("Uploaded file is empty.")
+        else:
+            st.warning("Please select a file first.")
+
+    st.markdown("---")
     # RAG Category Filter
     selected_categories = st.multiselect(
         "Filter RAG Knowledge Categories",
@@ -99,8 +131,9 @@ with st.sidebar:
         help="Restrict vector retrieval to specific knowledge domains."
     )
     
-    if st.button("🗑️ Clear Chat History"):
+    if st.button("🗑️ Clear Chat & Reset Custom Index"):
         st.session_state.messages = []
+        st.session_state.custom_documents = []
         st.session_state.analytics = {
             "bilstm_latencies": [],
             "faiss_latencies": [],
@@ -194,8 +227,8 @@ if st.button("Send Request", type="primary"):
                 st.write("🔍 Filtering documents & querying FAISS Vector Database...")
                 t0_faiss = time.perf_counter()
                 
-                # Filter documents by selected categories
-                filtered_docs = [doc for doc in KNOWLEDGE_DOCUMENTS if doc["category"] in selected_categories]
+                # Filter documents across static and dynamic uploads by category
+                filtered_docs = [doc for doc in all_active_documents if doc["category"] in selected_categories]
                 embedding_dim = 128
                 active_faiss_index, active_docs = build_faiss_index_for_docs(filtered_docs, tokenizer, embedding_dim)
 
