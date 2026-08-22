@@ -147,6 +147,26 @@ with st.sidebar:
     )
 
     st.markdown("---")
+    st.header("🔍 Chat Navigation & Search")
+    
+    # Feature 1: In-Chat Search
+    chat_search_query = st.text_input("Find in active chat", placeholder="Type keyword...", key="chat_search_key")
+    
+    # Feature 2: Quick Jump Outline
+    if st.session_state.messages:
+        st.subheader("📍 Jump to Message")
+        user_msgs = [(idx, msg["content"]) for idx, msg in enumerate(st.session_state.messages) if msg["role"] == "user"]
+        
+        if user_msgs:
+            for idx, text in user_msgs:
+                label_text = text[:28] + ("..." if len(text) > 28 else "")
+                st.markdown(f"👉 [{label_text}](#msg-{idx})")
+        else:
+            st.caption("No user messages yet.")
+    else:
+        st.caption("Chat is currently empty.")
+
+    st.markdown("---")
     st.header("💾 Session History")
     
     session_name = st.text_input("Session Name", value="Session_1")
@@ -209,13 +229,38 @@ with st.sidebar:
         })
 
 # --- Main Chat UI ---
-for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
-        if "metadata" in msg:
-            st.caption(msg["metadata"])
-        if "audio" in msg and msg["audio"] is not None:
-            st.audio(msg["audio"], format="audio/mp3")
+search_active = bool(chat_search_query.strip())
+matches_found = 0
+
+for i, msg in enumerate(st.session_state.messages):
+    # Search filter match calculation
+    is_match = False
+    if search_active:
+        if chat_search_query.lower() in msg["content"].lower():
+            is_match = True
+            matches_found += 1
+    
+    # If user is searching, only show matching turns
+    if not search_active or is_match:
+        # Anchor div for smooth navigation target
+        st.markdown(f'<div id="msg-{i}"></div>', unsafe_allow_html=True)
+        
+        with st.chat_message(msg["role"]):
+            content_to_display = msg["content"]
+            
+            # Highlight keyword matching during search
+            if search_active and is_match:
+                st.markdown(f"🔍 *Found match for '{chat_search_query}':*")
+            
+            st.markdown(content_to_display)
+            
+            if "metadata" in msg:
+                st.caption(msg["metadata"])
+            if "audio" in msg and msg["audio"] is not None:
+                st.audio(msg["audio"], format="audio/mp3")
+
+if search_active:
+    st.info(f"🔎 Filtered results for '**{chat_search_query}**': Found **{matches_found}** matching message(s).")
 
 st.markdown("---")
 
