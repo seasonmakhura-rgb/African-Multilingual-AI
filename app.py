@@ -133,7 +133,6 @@ def build_faiss_index_for_docs(docs, tokenizer, embedding_dim=128):
 
 # Combine static documents with dynamic custom uploads
 all_active_documents = KNOWLEDGE_DOCUMENTS + st.session_state.custom_documents
-ALL_CATEGORIES = sorted(list(set(doc["category"] for doc in all_active_documents)))
 
 # --- Header ---
 st.title("🌳 BAOBAB AI")
@@ -145,14 +144,6 @@ with st.sidebar:
         "Output Language", 
         sorted(label_encoder.classes_), 
         index=sorted(label_encoder.classes_).index("Portuguese") if "Portuguese" in label_encoder.classes_ else 0
-    )
-    
-    st.markdown("---")
-    st.header("🔍 Domain Filters")
-    selected_categories = st.multiselect(
-        "Active Categories",
-        options=ALL_CATEGORIES,
-        default=ALL_CATEGORIES
     )
 
     st.markdown("---")
@@ -228,7 +219,7 @@ for msg in st.session_state.messages:
 
 st.markdown("---")
 
-# --- Attachment, Prompt Input & Action Bar ---
+# --- Attachment Popover, Text Field, Mic & Send Button ---
 input_col1, input_col2, input_col3 = st.columns([1, 7, 2])
 
 # Left Side: Attachments (+)
@@ -346,11 +337,10 @@ if send_pressed:
                 bilstm_latency_ms = (time.perf_counter() - t0_bilstm) * 1000
                 st.session_state.analytics["bilstm_latencies"].append(round(bilstm_latency_ms, 2))
 
-                # Step 2: FAISS Vector Retrieval
+                # Step 2: FAISS Vector Retrieval (Searches all active docs)
                 t0_faiss = time.perf_counter()
-                filtered_docs = [doc for doc in all_active_documents if doc["category"] in selected_categories]
                 embedding_dim = 128
-                active_faiss_index, active_docs = build_faiss_index_for_docs(filtered_docs, tokenizer, embedding_dim)
+                active_faiss_index, active_docs = build_faiss_index_for_docs(all_active_documents, tokenizer, embedding_dim)
 
                 rag_context = "No relevant document found."
                 doc_title = "None"
