@@ -5,3 +5,7 @@ numpy
 streamlit-mic-recorder
 gTTS
 faiss-cpu
+pypdf
+python-docx
+python-pptx
+pillow
