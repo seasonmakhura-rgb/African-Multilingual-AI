@@ -12,6 +12,15 @@ from gtts import gTTS
 # Page Config
 st.set_page_config(page_title="African Multilingual AI Assistant", page_icon="🌍")
 
+# Dynamic TTS Language Mapping
+TTS_LANG_MAP = {
+    'Portuguese': 'pt',
+    'French': 'fr',
+    'Swahili': 'sw',
+    'English': 'en',
+    'Spanish': 'es'
+}
+
 # Load Classifier Artifacts
 @st.cache_resource
 def load_artifacts():
@@ -30,7 +39,7 @@ client = genai.Client(api_key=api_key)
 
 # App UI
 st.title("🌍 African Multilingual AI Assistant")
-st.write("Detects 16 languages using a custom BiLSTM neural network and responds in your chosen language.")
+st.write("Detects 16 languages using a custom BiLSTM neural network and responds in your chosen language with voice synthesis.")
 
 # Input Mode Selection
 input_mode = st.radio("Choose Input Method:", ["💬 Text Input", "🎙️ Voice Input"], horizontal=True)
@@ -41,7 +50,6 @@ if input_mode == "💬 Text Input":
     user_input = st.text_area("Type your message here:", placeholder="e.g., Habari yako, o kae?")
 else:
     st.write("Click below, speak, and click stop to transcribe:")
-    # Speech-to-Text converts audio bytes to text directly
     recorded_text = speech_to_text(
         start_prompt="🔴 Start Recording", 
         stop_prompt="⏹️ Stop Recording", 
@@ -63,24 +71,32 @@ if st.button("Send Request", type="primary"):
     if not user_input.strip():
         st.warning("Please provide a text input or speak into the microphone.")
     else:
-        # 1. Preprocess & Predict Language
-        seq = tokenizer.texts_to_sequences([user_input])
-        padded = pad_sequences(seq, maxlen=50)
-        preds = model.predict(padded)
-        detected_lang = label_encoder.inverse_transform([np.argmax(preds)])[0]
-        confidence = float(np.max(preds)) * 100
+        # Step 1: Preprocess & Predict Language via BiLSTM
+        with st.status("Running Dynamic Pipeline...", expanded=True) as status:
+            st.write("🧠 Preprocessing text & classifying language with BiLSTM model...")
+            seq = tokenizer.texts_to_sequences([user_input])
+            padded = pad_sequences(seq, maxlen=50)
+            preds = model.predict(padded)
+            detected_lang = label_encoder.inverse_transform([np.argmax(preds)])[0]
+            confidence = float(np.max(preds)) * 100
 
-        # 2. Build System Prompt
-        prompt_sent = f"""SYSTEM INSTRUCTION:
+            # Step 2: Confidence-Gated Dynamic Prompting
+            st.write("⚙️ Assembling dynamic prompt for Gemini LLM...")
+            if confidence >= 75.0:
+                lang_context = f"Detected Input Language: {detected_lang} (High Confidence: {confidence:.1f}%)."
+            else:
+                lang_context = f"Detected Input Language might be {detected_lang} (Lower Confidence: {confidence:.1f}%). Please account for potential language or dialect ambiguity."
+
+            prompt_sent = f"""SYSTEM INSTRUCTION:
 You are an expert multilingual AI assistant.
-Detected Input Language from User: {detected_lang} (Confidence: {confidence:.1f}%).
+{lang_context}
 TARGET OUTPUT LANGUAGE ENFORCEMENT: Regardless of the input language, you MUST compose your entire response strictly in {target_language}.
 
 USER QUERY: {user_input}
 RESPONSE ({target_language}):"""
 
-        # 3. Call Gemini API
-        with st.spinner("Generating AI response..."):
+            # Step 3: Call Gemini API
+            st.write("🚀 Requesting generative response from Gemini...")
             try:
                 response = client.models.generate_content(
                     model='gemini-3.6-flash',
@@ -90,17 +106,27 @@ RESPONSE ({target_language}):"""
             except Exception as e:
                 ai_output = f"Error: {str(e)}"
 
-        # Display Results
-        st.success(f"🧠 **Classifier Output:** Detected **{detected_lang}** ({confidence:.1f}% confidence)")
+            status.update(label="Pipeline processing complete!", state="complete", expanded=False)
+
+        # Display Outputs
+        if confidence < 75.0:
+            st.warning(f"🧠 **Classifier Output:** Detected **{detected_lang}** ({confidence:.1f}% confidence - Low Confidence Mode Active)")
+        else:
+            st.success(f"🧠 **Classifier Output:** Detected **{detected_lang}** ({confidence:.1f}% confidence)")
+
         st.markdown("### AI Response")
         st.write(ai_output)
 
-        # 4. Generate & Play Spoken Response (TTS)
+        # Step 4: Dynamic Language Audio Routing (TTS)
+        selected_tts_lang = TTS_LANG_MAP.get(target_language, 'en')
         try:
-            tts = gTTS(text=ai_output, lang='pt' if target_language == 'Portuguese' else 'en')
+            tts = gTTS(text=ai_output, lang=selected_tts_lang)
             fp = io.BytesIO()
             tts.write_to_fp(fp)
             fp.seek(0)
             st.audio(fp, format='audio/mp3')
         except Exception:
-            pass
+            st.info("Audio playback unavailable for this language code.")
+
+        with st.expander("🔍 View Full Backend System Prompt"):
+            st.code(prompt_sent)
