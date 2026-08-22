@@ -228,12 +228,13 @@ for msg in st.session_state.messages:
 
 st.markdown("---")
 
-# --- Attachment Popover and Action Bar ---
-input_col1, input_col2, input_col3 = st.columns([1, 8, 1])
+# --- Attachment, Prompt Input & Action Bar ---
+input_col1, input_col2, input_col3 = st.columns([1, 7, 2])
 
+# Left Side: Attachments (+)
 with input_col1:
-    with st.popover("➕", help="Add attachments or voice"):
-        tab_file, tab_photo, tab_voice = st.tabs(["📄 Upload", "📷 Camera", "🎙️ Voice"])
+    with st.popover("➕", help="Add attachments"):
+        tab_file, tab_photo = st.tabs(["📄 Upload", "📷 Camera"])
         
         with tab_file:
             uploaded_file = st.file_uploader(
@@ -288,18 +289,7 @@ with input_col1:
                 else:
                     st.info("Capture a photo first.")
 
-        with tab_voice:
-            st.write("Record spoken prompt:")
-            recorded_text = speech_to_text(
-                start_prompt="🔴 Record", 
-                stop_prompt="⏹️ Stop", 
-                just_once=False, 
-                key='stt_popover'
-            )
-            if recorded_text:
-                st.session_state.pending_input = recorded_text
-                st.success(f"Captured: '{recorded_text}'")
-
+# Middle: Text Input
 with input_col2:
     user_input = st.text_input(
         "Prompt",
@@ -309,8 +299,23 @@ with input_col2:
         key="main_prompt_field"
     )
 
+# Right Side: Microphone Recorder & Send Button
 with input_col3:
-    send_pressed = st.button("Send", type="primary", use_container_width=True)
+    btn_col1, btn_col2 = st.columns([1, 1])
+    
+    with btn_col1:
+        recorded_text = speech_to_text(
+            start_prompt="🎙️", 
+            stop_prompt="⏹️", 
+            just_once=False, 
+            key='stt_right_side'
+        )
+        if recorded_text:
+            st.session_state.pending_input = recorded_text
+            st.rerun()
+
+    with btn_col2:
+        send_pressed = st.button("Send", type="primary", use_container_width=True)
 
 # Process Prompt
 if send_pressed:
