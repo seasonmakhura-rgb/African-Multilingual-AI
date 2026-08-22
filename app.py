@@ -39,7 +39,6 @@ def load_system_resources():
     # Build Lightweight FAISS Vector Index using Tokenizer Bag-of-Words Embeddings
     embedding_dim = 128
     np.random.seed(42)
-    # Generate deterministic vectors for knowledge documents
     doc_vectors = []
     for doc in KNOWLEDGE_DOCUMENTS:
         seq = tokenizer.texts_to_sequences([doc['text']])
@@ -119,30 +118,29 @@ if st.button("Send Request", type="primary"):
             detected_lang = label_encoder.inverse_transform([np.argmax(preds)])[0]
             confidence = float(np.max(preds)) * 100
 
-            # Step 2: RAG Retrieval via FAISS with Similarity Threshold
-st.write("🔍 Querying FAISS Vector Database for context...")
-q_vec = np.zeros(embedding_dim, dtype='float32')
-if seq[0]:
-    for idx in seq[0][:embedding_dim]:
-        q_vec[idx % embedding_dim] += 1.0
-q_matrix = np.array([q_vec]).astype('float32')
-faiss.normalize_L2(q_matrix)
+            # Step 2: RAG Retrieval via FAISS with Similarity Score Threshold
+            st.write("🔍 Querying FAISS Vector Database for context...")
+            q_vec = np.zeros(embedding_dim, dtype='float32')
+            if seq[0]:
+                for idx in seq[0][:embedding_dim]:
+                    q_vec[idx % embedding_dim] += 1.0
+            q_matrix = np.array([q_vec]).astype('float32')
+            faiss.normalize_L2(q_matrix)
+            
+            distances, indices = faiss_index.search(q_matrix, k=1)
+            similarity_score = float(distances[0][0])
+            
+            SIMILARITY_THRESHOLD = 0.35
+            if similarity_score >= SIMILARITY_THRESHOLD:
+                retrieved_doc = KNOWLEDGE_DOCUMENTS[indices[0][0]]
+                rag_context = retrieved_doc["text"]
+                doc_title = retrieved_doc["title"]
+            else:
+                rag_context = "No relevant document found."
+                doc_title = "None (No Match)"
 
-distances, indices = faiss_index.search(q_matrix, k=1)
-similarity_score = float(distances[0][0])
+            st.write(f"📄 Retrieved Document: **{doc_title}** (Score: {similarity_score:.2f})")
 
-# Only pass knowledge context if similarity score meets the threshold
-SIMILARITY_THRESHOLD = 0.35
-
-if similarity_score >= SIMILARITY_THRESHOLD:
-    retrieved_doc = KNOWLEDGE_DOCUMENTS[indices[0][0]]
-    rag_context = retrieved_doc["text"]
-    doc_title = retrieved_doc["title"]
-else:
-    rag_context = "No relevant background document found for this specific query."
-    doc_title = "None (No Match)"
-
-st.write(f"📄 Retrieved Document: **{doc_title}** (Score: {similarity_score:.2f})")
             # Step 3: System Prompt Construction
             history_context = ""
             for past_msg in st.session_state.messages[:-1]:
@@ -175,7 +173,7 @@ RESPONSE ({target_language}):"""
 
             status.update(label="RAG Pipeline Execution Complete!", state="complete", expanded=False)
 
-        metadata = f"🧠 Detected **{detected_lang}** ({confidence:.1f}%) | 📄 Knowledge Context: *{retrieved_doc['title']}*"
+        metadata = f"🧠 Detected **{detected_lang}** ({confidence:.1f}%) | 📄 Knowledge Context: *{doc_title}*"
         st.session_state.messages.append({"role": "assistant", "content": ai_output, "metadata": metadata})
 
         # Step 5: TTS Speech Synthesis
