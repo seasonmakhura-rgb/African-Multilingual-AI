@@ -1,5 +1,6 @@
 streamlit
 google-genai
 tensorflow-cpu
-scikit-learn
 numpy
+streamlit-mic-recorder
+gTTS
