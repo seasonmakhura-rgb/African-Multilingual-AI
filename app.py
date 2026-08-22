@@ -1,8 +1,10 @@
 import os
 import io
 import time
+import json
 import pickle
 import numpy as np
+import pandas as pd
 import streamlit as st
 import tensorflow as tf
 from tensorflow.keras.preprocessing.sequence import pad_sequences
@@ -165,6 +167,42 @@ with st.sidebar:
             "BiLSTM (ms)": b_latencies,
             "FAISS (ms)": f_latencies
         })
+
+    st.markdown("---")
+    st.header("💾 Export Data")
+    
+    # 1. Export Chat Logs as JSON
+    export_chat_data = []
+    for msg in st.session_state.messages:
+        export_chat_data.append({
+            "role": msg["role"],
+            "content": msg["content"],
+            "metadata": msg.get("metadata", "")
+        })
+    
+    chat_json_bytes = json.dumps(export_chat_data, indent=2).encode('utf-8')
+    st.download_button(
+        label="📥 Download Chat History (JSON)",
+        data=chat_json_bytes,
+        file_name="chat_history.json",
+        mime="application/json",
+        disabled=len(export_chat_data) == 0
+    )
+
+    # 2. Export Telemetry & Latencies as CSV
+    if b_latencies:
+        metrics_df = pd.DataFrame({
+            "Turn": list(range(1, len(b_latencies) + 1)),
+            "BiLSTM_Latency_ms": b_latencies,
+            "FAISS_Latency_ms": f_latencies
+        })
+        csv_bytes = metrics_df.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="📊 Download Latency Metrics (CSV)",
+            data=csv_bytes,
+            file_name="latency_metrics.csv",
+            mime="text/csv"
+        )
 
 # Render History
 for msg in st.session_state.messages:
