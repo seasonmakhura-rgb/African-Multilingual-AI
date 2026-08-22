@@ -20,7 +20,7 @@ from documents import KNOWLEDGE_DOCUMENTS
 from guardrails import validate_user_input
 
 # Page Config
-st.set_page_config(page_title="African Multilingual RAG AI", page_icon="🌍", layout="wide")
+st.set_page_config(page_title="BAOBAB AI - Multilingual RAG", page_icon="🌳", layout="wide")
 
 # Ensure persistent storage directory exists
 SAVES_DIR = "saved_chats"
@@ -138,8 +138,8 @@ all_active_documents = KNOWLEDGE_DOCUMENTS + st.session_state.custom_documents
 ALL_CATEGORIES = sorted(list(set(doc["category"] for doc in all_active_documents)))
 
 # --- Header Section ---
-st.title("🌍 African Multilingual AI Assistant (RAG Enabled)")
-st.caption("Integrates BiLSTM language classification, multi-format & camera knowledge ingestion, guardrails, and persistent chat memory.")
+st.title("🌳 BAOBAB AI")
+st.caption("African Multilingual Intelligent Assistant powered by BiLSTM Language Classification & RAG Knowledge Retrieval.")
 
 # --- Main Page Ingestion Panel (Expander) ---
 with st.expander("📂 **Knowledge Ingestion Panel (Upload Documents or Take Photos)**", expanded=False):
@@ -186,7 +186,7 @@ with st.expander("📂 **Knowledge Ingestion Panel (Upload Documents or Take Pho
                     "text": extracted_text
                 }
                 st.session_state.custom_documents.append(new_doc)
-                st.success(f"Indexed **{doc_title_name}**!")
+                st.success(f"Indexed **{doc_title_name}** into BAOBAB AI!")
                 st.rerun()
             else:
                 st.warning("No readable text found to index.")
@@ -195,7 +195,7 @@ st.markdown("---")
 
 # --- Sidebar Controls ---
 with st.sidebar:
-    st.header("⚙️ Settings & Controls")
+    st.header("⚙️ BAOBAB AI Controls")
     target_language = st.selectbox(
         "Target Output Language", 
         sorted(label_encoder.classes_), 
@@ -315,7 +315,7 @@ if st.button("Send Request", type="primary"):
         else:
             st.session_state.messages.append({"role": "user", "content": user_input})
             
-            with st.status("Executing RAG Pipeline...", expanded=True) as status:
+            with st.status("Executing BAOBAB AI Pipeline...", expanded=True) as status:
                 # Step 1: BiLSTM Detection
                 t0_bilstm = time.perf_counter()
                 seq = tokenizer.texts_to_sequences([user_input])
@@ -358,11 +358,11 @@ if st.button("Send Request", type="primary"):
                 faiss_latency_ms = (time.perf_counter() - t0_faiss) * 1000
                 st.session_state.analytics["faiss_latencies"].append(round(faiss_latency_ms, 2))
 
-                # Step 3: Prompt Construction
+                # Step 3: System Prompt Construction
                 history_context = "".join([f"{m['role'].upper()}: {m['content']}\n" for m in st.session_state.messages[:-1]])
 
                 prompt_sent = f"""SYSTEM INSTRUCTION:
-You are an expert multilingual AI assistant.
+You are BAOBAB AI, an expert African multilingual AI assistant.
 Detected Input Language: {detected_lang} (Confidence: {confidence:.1f}%).
 TARGET OUTPUT LANGUAGE: Compose your response strictly in {target_language}.
 
