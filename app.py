@@ -57,6 +57,32 @@ if "pending_input" not in st.session_state:
 api_key = st.secrets.get("GEMINI_API_KEY", os.environ.get("GEMINI_API_KEY"))
 client = genai.Client(api_key=api_key)
 
+# Callback function to handle spoken audio transcription directly upon recording
+def transcribe_audio_callback():
+    audio_data = st.session_state.get("live_mic_recorder")
+    if audio_data is not None:
+        try:
+            audio_bytes = audio_data.read()
+            # Detect actual browser audio MIME type (audio/webm, audio/ogg, audio/wav)
+            mime_type = getattr(audio_data, "type", "audio/wav") or "audio/wav"
+            
+            audio_part = types.Part.from_bytes(
+                data=audio_bytes,
+                mime_type=mime_type
+            )
+            
+            stt_response = client.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=[
+                    audio_part,
+                    "Transcribe the spoken audio into text accurately without adding explanations or extra output."
+                ]
+            )
+            if stt_response.text:
+                st.session_state.pending_input = stt_response.text.strip()
+        except Exception as e:
+            st.error(f"Audio transcription error: {str(e)}")
+
 # Helper function to extract text from multi-format files
 def extract_text_from_file(uploaded_file, client_gemini=None):
     filename = uploaded_file.name.lower()
@@ -327,33 +353,14 @@ with input_col2:
         key="main_prompt_field"
     )
 
-# Right Side: Native Audio Input (with waveform visualization) & Send Button
+# Right Side: Live Audio Recorder with callback & Send Button
 with input_col3:
-    recorded_audio = st.audio_input("Record voice", label_visibility="collapsed", key="live_mic_recorder")
-    
-    # Process recorded audio immediately upon recording completion
-    if recorded_audio is not None and "last_audio" not in st.session_state:
-        st.session_state["last_audio"] = recorded_audio.name
-        with st.spinner("Transcribing spoken audio with Gemini..."):
-            audio_bytes = recorded_audio.read()
-            mime_type = getattr(recorded_audio, "type", "audio/wav") or "audio/wav"
-            
-            # Format audio byte stream into Google GenAI Part
-            audio_part = types.Part.from_bytes(
-                data=audio_bytes,
-                mime_type=mime_type
-            )
-            
-            stt_response = client.models.generate_content(
-                model='gemini-2.5-flash',
-                contents=[
-                    audio_part,
-                    "Transcribe the spoken audio into text accurately without adding explanations or extra output."
-                ]
-            )
-            st.session_state.pending_input = stt_response.text.strip()
-            st.rerun()
-
+    st.audio_input(
+        "Record voice",
+        label_visibility="collapsed",
+        key="live_mic_recorder",
+        on_change=transcribe_audio_callback
+    )
     send_pressed = st.button("Send", type="primary", use_container_width=True)
 
 # Process Prompt
@@ -362,7 +369,6 @@ if send_pressed:
         st.warning("Please enter a message.")
     else:
         st.session_state.pending_input = ""
-        st.session_state.pop("last_audio", None)
         st.session_state.analytics["total_requests"] += 1
         
         # Guardrails check
