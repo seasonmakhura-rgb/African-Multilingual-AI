@@ -1,4 +1,4 @@
 streamlit
 google-genai
-tensorflow
+tf-keras
 numpy
