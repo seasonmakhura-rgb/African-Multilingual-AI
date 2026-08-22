@@ -20,9 +20,9 @@ from documents import KNOWLEDGE_DOCUMENTS
 from guardrails import validate_user_input
 
 # Page Config
-st.set_page_config(page_title="African Multilingual RAG AI", page_icon="🌍")
+st.set_page_config(page_title="African Multilingual RAG AI", page_icon="🌍", layout="wide")
 
-# Ensure persistent storage directory exists for saved chats
+# Ensure persistent storage directory exists
 SAVES_DIR = "saved_chats"
 os.makedirs(SAVES_DIR, exist_ok=True)
 
@@ -112,7 +112,7 @@ def load_system_resources():
 
 model, tokenizer, label_encoder = load_system_resources()
 
-# Helper function to dynamically build FAISS index based on active category filters and uploads
+# Dynamic FAISS Index builder
 def build_faiss_index_for_docs(docs, tokenizer, embedding_dim=128):
     if not docs:
         return None, []
@@ -135,29 +135,87 @@ def build_faiss_index_for_docs(docs, tokenizer, embedding_dim=128):
 
 # Combine static documents with dynamic custom uploads
 all_active_documents = KNOWLEDGE_DOCUMENTS + st.session_state.custom_documents
-
-# Extract unique document categories dynamically
 ALL_CATEGORIES = sorted(list(set(doc["category"] for doc in all_active_documents)))
 
-# App UI
+# --- Header Section ---
 st.title("🌍 African Multilingual AI Assistant (RAG Enabled)")
-st.write("Integrates BiLSTM language classification, multi-format & camera knowledge ingestion, guardrails, and persistent chat memory.")
+st.caption("Integrates BiLSTM language classification, multi-format & camera knowledge ingestion, guardrails, and persistent chat memory.")
 
-# Sidebar Controls & Dynamic Uploads
+# --- Main Page Ingestion Panel (Expander) ---
+with st.expander("📂 **Knowledge Ingestion Panel (Upload Documents or Take Photos)**", expanded=False):
+    ingest_col1, ingest_col2 = st.columns([2, 1])
+    
+    with ingest_col1:
+        ingest_source = st.radio("Select Input Method:", ["📄 Upload Document (PDF, DOCX, PPTX, TXT, Images)", "📷 Take Document Photo"], horizontal=True)
+        extracted_text = ""
+        doc_title_name = ""
+
+        if ingest_source == "📄 Upload Document (PDF, DOCX, PPTX, TXT, Images)":
+            uploaded_file = st.file_uploader(
+                "Upload Document File", 
+                type=["txt", "pdf", "docx", "pptx", "jpg", "jpeg", "png"]
+            )
+            if uploaded_file is not None:
+                doc_title_name = uploaded_file.name
+                with st.spinner("Parsing document contents..."):
+                    extracted_text = extract_text_from_file(uploaded_file, client_gemini=client)
+        else:
+            camera_image = st.camera_input("Take a photo of your document")
+            if camera_image is not None:
+                doc_title_name = f"Camera_Scan_{int(time.time())}.jpg"
+                with st.spinner("Running Vision OCR on camera photo..."):
+                    img = Image.open(camera_image)
+                    prompt = "Extract and transcribe all readable text from this document image cleanly and accurately."
+                    ocr_response = client.models.generate_content(
+                        model='gemini-2.5-flash',
+                        contents=[img, prompt]
+                    )
+                    extracted_text = ocr_response.text.strip()
+
+    with ingest_col2:
+        upload_category = st.text_input("Assign Knowledge Category", value="Custom Knowledge")
+        if extracted_text:
+            st.info(f"**Extracted Character Count:** {len(extracted_text)}")
+        
+        if st.button("📥 Index into FAISS Vector DB", use_container_width=True):
+            if extracted_text:
+                new_doc = {
+                    "id": len(all_active_documents) + 1,
+                    "title": doc_title_name,
+                    "category": upload_category.strip() if upload_category.strip() else "Custom Knowledge",
+                    "text": extracted_text
+                }
+                st.session_state.custom_documents.append(new_doc)
+                st.success(f"Indexed **{doc_title_name}**!")
+                st.rerun()
+            else:
+                st.warning("No readable text found to index.")
+
+st.markdown("---")
+
+# --- Sidebar Controls ---
 with st.sidebar:
     st.header("⚙️ Settings & Controls")
     target_language = st.selectbox(
-        "Select Target Output Language", 
+        "Target Output Language", 
         sorted(label_encoder.classes_), 
         index=sorted(label_encoder.classes_).index("Portuguese") if "Portuguese" in label_encoder.classes_ else 0
     )
     
     st.markdown("---")
-    st.header("💾 Session Memory & History")
+    st.header("🔍 RAG Knowledge Filters")
+    selected_categories = st.multiselect(
+        "Filter Active Knowledge Domains",
+        options=ALL_CATEGORIES,
+        default=ALL_CATEGORIES,
+        help="Restrict vector retrieval to specific categories."
+    )
+
+    st.markdown("---")
+    st.header("💾 Session History")
     
-    # Save Current Session
     session_name = st.text_input("Session Name", value="Session_1")
-    if st.button("💾 Save Current Chat Session"):
+    if st.button("💾 Save Session"):
         if st.session_state.messages:
             save_payload = {
                 "messages": [
@@ -169,83 +227,22 @@ with st.sidebar:
             file_path = os.path.join(SAVES_DIR, f"{session_name.strip()}.json")
             with open(file_path, "w", encoding="utf-8") as f:
                 json.dump(save_payload, f, indent=2)
-            st.success(f"Session saved as **{session_name}.json**!")
+            st.success(f"Saved **{session_name}.json**")
             st.rerun()
-        else:
-            st.warning("No messages to save yet.")
 
-    # Load Saved Session
     saved_files = [f.replace(".json", "") for f in os.listdir(SAVES_DIR) if f.endswith(".json")]
     if saved_files:
-        selected_file = st.selectbox("Load Saved History", ["-- Select Session --"] + saved_files)
-        if st.button("📂 Load Selected Session"):
+        selected_file = st.selectbox("Load History", ["-- Select Session --"] + saved_files)
+        if st.button("📂 Load Session"):
             if selected_file != "-- Select Session --":
                 file_path = os.path.join(SAVES_DIR, f"{selected_file}.json")
                 with open(file_path, "r", encoding="utf-8") as f:
                     loaded_data = json.load(f)
                 st.session_state.messages = loaded_data.get("messages", [])
                 st.session_state.analytics = loaded_data.get("analytics", st.session_state.analytics)
-                st.success(f"Loaded **{selected_file}**!")
                 st.rerun()
-    else:
-        st.caption("No saved sessions found on disk.")
 
-    st.markdown("---")
-    st.header("📁 Multi-Format Knowledge Ingestion")
-    
-    # Ingestion Source Selector
-    ingest_source = st.radio("Choose Input Type:", ["📄 Upload Document", "📷 Capture Photo"], horizontal=True)
-    upload_category = st.text_input("Assign Category for Upload", value="Custom Knowledge")
-
-    extracted_text = ""
-    doc_title_name = ""
-
-    if ingest_source == "📄 Upload Document":
-        uploaded_file = st.file_uploader(
-            "Upload TXT, PDF, DOCX, PPTX, or JPG/PNG", 
-            type=["txt", "pdf", "docx", "pptx", "jpg", "jpeg", "png"]
-        )
-        if uploaded_file is not None:
-            doc_title_name = uploaded_file.name
-            with st.spinner("Parsing document contents..."):
-                extracted_text = extract_text_from_file(uploaded_file, client_gemini=client)
-    else:
-        camera_image = st.camera_input("Take a photo of a document")
-        if camera_image is not None:
-            doc_title_name = f"Camera_Scan_{int(time.time())}.jpg"
-            with st.spinner("Running Vision OCR on camera photo..."):
-                img = Image.open(camera_image)
-                prompt = "Extract and transcribe all readable text from this document image cleanly and accurately."
-                ocr_response = client.models.generate_content(
-                    model='gemini-2.5-flash',
-                    contents=[img, prompt]
-                )
-                extracted_text = ocr_response.text.strip()
-
-    if st.button("📥 Index into FAISS Vector DB"):
-        if extracted_text:
-            new_doc = {
-                "id": len(all_active_documents) + 1,
-                "title": doc_title_name,
-                "category": upload_category.strip() if upload_category.strip() else "Custom Knowledge",
-                "text": extracted_text
-            }
-            st.session_state.custom_documents.append(new_doc)
-            st.success(f"Successfully indexed **{doc_title_name}** into FAISS!")
-            st.rerun()
-        else:
-            st.warning("No readable text found to index.")
-
-    st.markdown("---")
-    # RAG Category Filter
-    selected_categories = st.multiselect(
-        "Filter RAG Knowledge Categories",
-        options=ALL_CATEGORIES,
-        default=ALL_CATEGORIES,
-        help="Restrict vector retrieval to specific knowledge domains."
-    )
-    
-    if st.button("🗑️ Clear Active Chat"):
+    if st.button("🗑️ Clear Chat History"):
         st.session_state.messages = []
         st.session_state.analytics = {
             "bilstm_latencies": [],
@@ -269,53 +266,14 @@ with st.sidebar:
     f_latencies = st.session_state.analytics["faiss_latencies"]
 
     if b_latencies:
-        avg_bilstm = float(np.mean(b_latencies))
-        avg_faiss = float(np.mean(f_latencies))
-        st.write(f"⚡ **Avg BiLSTM Latency:** `{avg_bilstm:.2f} ms`")
-        st.write(f"🔍 **Avg FAISS Latency:** `{avg_faiss:.2f} ms`")
-        st.caption("Inference Latency Trend (ms)")
+        st.write(f"⚡ **BiLSTM Avg:** `{np.mean(b_latencies):.2f} ms`")
+        st.write(f"🔍 **FAISS Avg:** `{np.mean(f_latencies):.2f} ms`")
         st.line_chart({
             "BiLSTM (ms)": b_latencies,
             "FAISS (ms)": f_latencies
         })
 
-    st.markdown("---")
-    st.header("💾 Export Data")
-    
-    # 1. Export Chat Logs as JSON
-    export_chat_data = []
-    for msg in st.session_state.messages:
-        export_chat_data.append({
-            "role": msg["role"],
-            "content": msg["content"],
-            "metadata": msg.get("metadata", "")
-        })
-    
-    chat_json_bytes = json.dumps(export_chat_data, indent=2).encode('utf-8')
-    st.download_button(
-        label="📥 Download Chat History (JSON)",
-        data=chat_json_bytes,
-        file_name="chat_history.json",
-        mime="application/json",
-        disabled=len(export_chat_data) == 0
-    )
-
-    # 2. Export Telemetry & Latencies as CSV
-    if b_latencies:
-        metrics_df = pd.DataFrame({
-            "Turn": list(range(1, len(b_latencies) + 1)),
-            "BiLSTM_Latency_ms": b_latencies,
-            "FAISS_Latency_ms": f_latencies
-        })
-        csv_bytes = metrics_df.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            label="📊 Download Latency Metrics (CSV)",
-            data=csv_bytes,
-            file_name="latency_metrics.csv",
-            mime="text/csv"
-        )
-
-# Render History
+# --- Main Chat UI ---
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
@@ -324,7 +282,6 @@ for msg in st.session_state.messages:
         if "audio" in msg and msg["audio"] is not None:
             st.audio(msg["audio"], format="audio/mp3")
 
-# Input Mode Selection
 input_mode = st.radio("Choose Input Method:", ["💬 Text Input", "🎙️ Voice Input"], horizontal=True)
 
 user_input = ""
@@ -332,7 +289,7 @@ user_input = ""
 if input_mode == "💬 Text Input":
     user_input = st.text_input("Type your message here:", key="text_field")
 else:
-    st.write("Click below, speak, and click stop to transcribe:")
+    st.write("Click below to record voice:")
     recorded_text = speech_to_text(
         start_prompt="🔴 Start Recording", 
         stop_prompt="⏹️ Stop Recording", 
@@ -345,24 +302,22 @@ else:
 
 if st.button("Send Request", type="primary"):
     if not user_input.strip():
-        st.warning("Please provide a text input or speak into the microphone.")
+        st.warning("Please provide input.")
     else:
         st.session_state.analytics["total_requests"] += 1
         
-        # Step 0: Execute Local Guardrails Check
+        # Step 0: Guardrails
         is_safe, guardrail_msg = validate_user_input(user_input)
         
         if not is_safe:
             st.session_state.analytics["blocked_requests"] += 1
-            st.error(f"🚫 **Input Blocked by System Guardrails**: {guardrail_msg}")
+            st.error(f"🚫 **Input Blocked**: {guardrail_msg}")
         else:
             st.session_state.messages.append({"role": "user", "content": user_input})
             
-            with st.status("Executing Multimodal & RAG Pipeline...", expanded=True) as status:
-                # Step 1: BiLSTM Language Detection
-                st.write("🧠 Classifying user language with BiLSTM model...")
+            with st.status("Executing RAG Pipeline...", expanded=True) as status:
+                # Step 1: BiLSTM Detection
                 t0_bilstm = time.perf_counter()
-                
                 seq = tokenizer.texts_to_sequences([user_input])
                 padded = pad_sequences(seq, maxlen=50)
                 preds = model.predict(padded)
@@ -372,11 +327,8 @@ if st.button("Send Request", type="primary"):
                 bilstm_latency_ms = (time.perf_counter() - t0_bilstm) * 1000
                 st.session_state.analytics["bilstm_latencies"].append(round(bilstm_latency_ms, 2))
 
-                # Step 2: RAG Retrieval via Filtered FAISS Index
-                st.write("🔍 Filtering documents & querying FAISS Vector Database...")
+                # Step 2: FAISS Vector Retrieval
                 t0_faiss = time.perf_counter()
-                
-                # Filter documents across static and dynamic uploads by category
                 filtered_docs = [doc for doc in all_active_documents if doc["category"] in selected_categories]
                 embedding_dim = 128
                 active_faiss_index, active_docs = build_faiss_index_for_docs(filtered_docs, tokenizer, embedding_dim)
@@ -396,44 +348,34 @@ if st.button("Send Request", type="primary"):
                         distances, indices = active_faiss_index.search(q_matrix, k=1)
                         similarity_score = float(distances[0][0])
                         
-                        SIMILARITY_THRESHOLD = 0.35
-                        if similarity_score >= SIMILARITY_THRESHOLD:
+                        if similarity_score >= 0.35:
                             retrieved_doc = active_docs[indices[0][0]]
                             rag_context = retrieved_doc["text"]
                             doc_title = f"[{retrieved_doc['category']}] {retrieved_doc['title']}"
                         else:
                             doc_title = "None (Low Similarity)"
-                    else:
-                        doc_title = "None (No Match)"
-                else:
-                    doc_title = "None (No Categories Selected)"
 
                 faiss_latency_ms = (time.perf_counter() - t0_faiss) * 1000
                 st.session_state.analytics["faiss_latencies"].append(round(faiss_latency_ms, 2))
 
-                st.write(f"📄 Retrieved Context: **{doc_title}**")
-
-                # Step 3: System Prompt Construction
-                history_context = ""
-                for past_msg in st.session_state.messages[:-1]:
-                    history_context += f"{past_msg['role'].upper()}: {past_msg['content']}\n"
+                # Step 3: Prompt Construction
+                history_context = "".join([f"{m['role'].upper()}: {m['content']}\n" for m in st.session_state.messages[:-1]])
 
                 prompt_sent = f"""SYSTEM INSTRUCTION:
 You are an expert multilingual AI assistant.
-Detected Input Language from User: {detected_lang} (Confidence: {confidence:.1f}%).
-TARGET OUTPUT LANGUAGE ENFORCEMENT: Regardless of the input language, you MUST compose your entire response strictly in {target_language}.
+Detected Input Language: {detected_lang} (Confidence: {confidence:.1f}%).
+TARGET OUTPUT LANGUAGE: Compose your response strictly in {target_language}.
 
-RETRIEVED KNOWLEDGE CONTEXT (RAG):
+RETRIEVED CONTEXT:
 {rag_context}
 
-CONVERSATION HISTORY:
-{history_context if history_context else "No prior context."}
+HISTORY:
+{history_context if history_context else "None."}
 
-CURRENT USER QUERY: {user_input}
+QUERY: {user_input}
 RESPONSE ({target_language}):"""
 
-                # Step 4: Call Gemini API (gemini-2.5-flash)
-                st.write("🚀 Generating grounded AI response...")
+                # Step 4: Call Gemini API
                 try:
                     response = client.models.generate_content(
                         model='gemini-2.5-flash',
@@ -441,13 +383,9 @@ RESPONSE ({target_language}):"""
                     )
                     ai_output = response.text
                 except Exception as e:
-                    if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
-                        ai_output = "⚠️ **Free-tier API limit reached.** Please wait a short moment and try again."
-                    else:
-                        ai_output = f"Error: {str(e)}"
+                    ai_output = f"Error: {str(e)}"
 
-                # Step 5: Speech Synthesis
-                st.write("🔊 Synthesizing speech output...")
+                # Step 5: TTS
                 audio_bytes = None
                 selected_tts_lang = TTS_LANG_MAP.get(target_language, 'en')
                 try:
@@ -458,9 +396,9 @@ RESPONSE ({target_language}):"""
                 except Exception:
                     pass
 
-                status.update(label="Pipeline Execution Complete!", state="complete", expanded=False)
+                status.update(label="Complete!", state="complete", expanded=False)
 
-            # Store metadata
+            # Metadata
             metadata = f"🧠 Detected **{detected_lang}** ({confidence:.1f}%) | 📄 Context: *{doc_title}* | ⏱️ BiLSTM: `{bilstm_latency_ms:.1f}ms` | FAISS: `{faiss_latency_ms:.1f}ms`"
             st.session_state.messages.append({
                 "role": "assistant", 
