@@ -191,6 +191,43 @@ with st.expander("📂 **Knowledge Ingestion Panel (Upload Documents or Take Pho
             else:
                 st.warning("No readable text found to index.")
 
+# --- Chat Search & Rapid Navigation Panel ---
+if st.session_state.messages:
+    with st.expander("🔍 **Search Conversation & Jump to Message**", expanded=False):
+        nav_col1, nav_col2 = st.columns([1, 1])
+        
+        # Keyword Search across active chat
+        with nav_col1:
+            search_query = st.text_input("🔎 Search conversation keyword:", value="", placeholder="Type keyword to find...")
+            if search_query.strip():
+                matches = [
+                    (idx, msg) for idx, msg in enumerate(st.session_state.messages) 
+                    if search_query.lower() in msg["content"].lower()
+                ]
+                if matches:
+                    st.success(f"Found {len(matches)} matching turn(s):")
+                    for idx, match in matches:
+                        role_icon = "👤 User" if match["role"] == "user" else "🌳 BAOBAB AI"
+                        snippet = match["content"][:100] + "..." if len(match["content"]) > 100 else match["content"]
+                        st.markdown(f"**Turn #{idx+1} ({role_icon}):** {snippet}")
+                else:
+                    st.info("No matching text found in current session.")
+        
+        # Message Selector Jump
+        with nav_col2:
+            options = [
+                f"Turn #{i+1}: ({'User' if msg['role'] == 'user' else 'BAOBAB'}) - {msg['content'][:40]}..."
+                for i, msg in enumerate(st.session_state.messages)
+            ]
+            selected_turn = st.selectbox("🎯 Quick Jump to Message Turn", options=options)
+            if selected_turn:
+                selected_idx = int(selected_turn.split(":")[0].replace("Turn #", "")) - 1
+                target_msg = st.session_state.messages[selected_idx]
+                st.markdown(f"**Selected Content:**")
+                st.info(target_msg["content"])
+                if "metadata" in target_msg:
+                    st.caption(target_msg["metadata"])
+
 st.markdown("---")
 
 # --- Sidebar Controls ---
