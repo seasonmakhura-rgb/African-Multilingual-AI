@@ -12,6 +12,10 @@ from google import genai
 from streamlit_mic_recorder import speech_to_text
 from gtts import gTTS
 import faiss
+from PIL import Image
+import pypdf
+import docx
+import pptx
 from documents import KNOWLEDGE_DOCUMENTS
 from guardrails import validate_user_input
 
@@ -45,6 +49,55 @@ if "analytics" not in st.session_state:
 
 if "custom_documents" not in st.session_state:
     st.session_state.custom_documents = []
+
+# Gemini API Client setup
+api_key = st.secrets.get("GEMINI_API_KEY", os.environ.get("GEMINI_API_KEY"))
+client = genai.Client(api_key=api_key)
+
+# Helper function to extract text from multi-format files
+def extract_text_from_file(uploaded_file, client_gemini=None):
+    filename = uploaded_file.name.lower()
+    
+    # 1. Plain Text File (.txt)
+    if filename.endswith(".txt"):
+        return uploaded_file.read().decode("utf-8").strip()
+
+    # 2. PDF File (.pdf)
+    elif filename.endswith(".pdf"):
+        pdf_reader = pypdf.PdfReader(uploaded_file)
+        text_content = []
+        for page in pdf_reader.pages:
+            extracted = page.extract_text()
+            if extracted:
+                text_content.append(extracted)
+        return "\n".join(text_content).strip()
+
+    # 3. Word Document (.docx)
+    elif filename.endswith(".docx"):
+        doc = docx.Document(uploaded_file)
+        return "\n".join([p.text for p in doc.paragraphs if p.text.strip()]).strip()
+
+    # 4. PowerPoint Presentation (.pptx)
+    elif filename.endswith(".pptx"):
+        prs = pptx.Presentation(uploaded_file)
+        text_content = []
+        for slide in prs.slides:
+            for shape in slide.shapes:
+                if hasattr(shape, "text") and shape.text.strip():
+                    text_content.append(shape.text)
+        return "\n".join(text_content).strip()
+
+    # 5. Image Files (.jpg, .jpeg, .png) via Gemini Vision OCR
+    elif filename.endswith((".jpg", ".jpeg", ".png")):
+        image = Image.open(uploaded_file)
+        prompt = "Extract and transcribe all readable text from this document image cleanly and accurately. Do not add commentary."
+        response = client_gemini.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=[image, prompt]
+        )
+        return response.text.strip()
+
+    return ""
 
 # Load Classifier Artifacts
 @st.cache_resource
@@ -86,13 +139,9 @@ all_active_documents = KNOWLEDGE_DOCUMENTS + st.session_state.custom_documents
 # Extract unique document categories dynamically
 ALL_CATEGORIES = sorted(list(set(doc["category"] for doc in all_active_documents)))
 
-# Gemini API Client setup
-api_key = st.secrets.get("GEMINI_API_KEY", os.environ.get("GEMINI_API_KEY"))
-client = genai.Client(api_key=api_key)
-
 # App UI
 st.title("🌍 African Multilingual AI Assistant (RAG Enabled)")
-st.write("Integrates BiLSTM language classification, dynamic FAISS knowledge ingestion, guardrails, and persistent chat memory.")
+st.write("Integrates BiLSTM language classification, multi-format & camera knowledge ingestion, guardrails, and persistent chat memory.")
 
 # Sidebar Controls & Dynamic Uploads
 with st.sidebar:
@@ -142,29 +191,50 @@ with st.sidebar:
         st.caption("No saved sessions found on disk.")
 
     st.markdown("---")
-    st.header("📁 Dynamic Knowledge Ingestion")
+    st.header("📁 Multi-Format Knowledge Ingestion")
     
-    # Custom File Uploader for FAISS RAG
-    uploaded_file = st.file_uploader("Upload `.txt` document to FAISS", type=["txt"])
+    # Ingestion Source Selector
+    ingest_source = st.radio("Choose Input Type:", ["📄 Upload Document", "📷 Capture Photo"], horizontal=True)
     upload_category = st.text_input("Assign Category for Upload", value="Custom Knowledge")
-    
-    if st.button("📥 Index Document into FAISS"):
+
+    extracted_text = ""
+    doc_title_name = ""
+
+    if ingest_source == "📄 Upload Document":
+        uploaded_file = st.file_uploader(
+            "Upload TXT, PDF, DOCX, PPTX, or JPG/PNG", 
+            type=["txt", "pdf", "docx", "pptx", "jpg", "jpeg", "png"]
+        )
         if uploaded_file is not None:
-            file_contents = uploaded_file.read().decode("utf-8").strip()
-            if file_contents:
-                new_doc = {
-                    "id": len(all_active_documents) + 1,
-                    "title": uploaded_file.name,
-                    "category": upload_category.strip() if upload_category.strip() else "Custom Knowledge",
-                    "text": file_contents
-                }
-                st.session_state.custom_documents.append(new_doc)
-                st.success(f"Indexed **{uploaded_file.name}** into FAISS!")
-                st.rerun()
-            else:
-                st.warning("Uploaded file is empty.")
+            doc_title_name = uploaded_file.name
+            with st.spinner("Parsing document contents..."):
+                extracted_text = extract_text_from_file(uploaded_file, client_gemini=client)
+    else:
+        camera_image = st.camera_input("Take a photo of a document")
+        if camera_image is not None:
+            doc_title_name = f"Camera_Scan_{int(time.time())}.jpg"
+            with st.spinner("Running Vision OCR on camera photo..."):
+                img = Image.open(camera_image)
+                prompt = "Extract and transcribe all readable text from this document image cleanly and accurately."
+                ocr_response = client.models.generate_content(
+                    model='gemini-2.5-flash',
+                    contents=[img, prompt]
+                )
+                extracted_text = ocr_response.text.strip()
+
+    if st.button("📥 Index into FAISS Vector DB"):
+        if extracted_text:
+            new_doc = {
+                "id": len(all_active_documents) + 1,
+                "title": doc_title_name,
+                "category": upload_category.strip() if upload_category.strip() else "Custom Knowledge",
+                "text": extracted_text
+            }
+            st.session_state.custom_documents.append(new_doc)
+            st.success(f"Successfully indexed **{doc_title_name}** into FAISS!")
+            st.rerun()
         else:
-            st.warning("Please select a file first.")
+            st.warning("No readable text found to index.")
 
     st.markdown("---")
     # RAG Category Filter
