@@ -9,7 +9,6 @@ import streamlit as st
 import tensorflow as tf
 from tensorflow.keras.preprocessing.sequence import pad_sequences
 from google import genai
-from streamlit_mic_recorder import speech_to_text
 from gtts import gTTS
 import faiss
 from PIL import Image
@@ -149,10 +148,8 @@ with st.sidebar:
     st.markdown("---")
     st.header("🔍 Chat Navigation & Search")
     
-    # Feature 1: In-Chat Search
     chat_search_query = st.text_input("Find in active chat", placeholder="Type keyword...", key="chat_search_key")
     
-    # Feature 2: Quick Jump Outline
     if st.session_state.messages:
         st.subheader("📍 Jump to Message")
         user_msgs = [(idx, msg["content"]) for idx, msg in enumerate(st.session_state.messages) if msg["role"] == "user"]
@@ -233,26 +230,20 @@ search_active = bool(chat_search_query.strip())
 matches_found = 0
 
 for i, msg in enumerate(st.session_state.messages):
-    # Search filter match calculation
     is_match = False
     if search_active:
         if chat_search_query.lower() in msg["content"].lower():
             is_match = True
             matches_found += 1
     
-    # If user is searching, only show matching turns
     if not search_active or is_match:
-        # Anchor div for smooth navigation target
         st.markdown(f'<div id="msg-{i}"></div>', unsafe_allow_html=True)
         
         with st.chat_message(msg["role"]):
-            content_to_display = msg["content"]
-            
-            # Highlight keyword matching during search
             if search_active and is_match:
                 st.markdown(f"🔍 *Found match for '{chat_search_query}':*")
             
-            st.markdown(content_to_display)
+            st.markdown(msg["content"])
             
             if "metadata" in msg:
                 st.caption(msg["metadata"])
@@ -264,8 +255,8 @@ if search_active:
 
 st.markdown("---")
 
-# --- Attachment Popover, Text Field, Mic & Send Button ---
-input_col1, input_col2, input_col3 = st.columns([1, 7, 2])
+# --- Attachment Popover, Text Field, Live Audio Recorder & Send ---
+input_col1, input_col2, input_col3 = st.columns([1, 6, 3])
 
 # Left Side: Attachments (+)
 with input_col1:
@@ -335,23 +326,26 @@ with input_col2:
         key="main_prompt_field"
     )
 
-# Right Side: Microphone Recorder & Send Button
+# Right Side: Native Audio Input (with waveform visualization) & Send Button
 with input_col3:
-    btn_col1, btn_col2 = st.columns([1, 1])
+    recorded_audio = st.audio_input("Record voice", label_visibility="collapsed", key="live_mic_recorder")
     
-    with btn_col1:
-        recorded_text = speech_to_text(
-            start_prompt="🎙️", 
-            stop_prompt="⏹️", 
-            just_once=False, 
-            key='stt_right_side'
-        )
-        if recorded_text:
-            st.session_state.pending_input = recorded_text
+    # Process recorded audio immediately upon recording completion
+    if recorded_audio is not None and "last_audio" not in st.session_state:
+        st.session_state["last_audio"] = recorded_audio.name
+        with st.spinner("Transcribing spoken audio with Gemini..."):
+            audio_bytes = recorded_audio.read()
+            stt_response = client.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=[
+                    {"mime_type": "audio/wav", "data": audio_bytes},
+                    "Transcribe the spoken audio into text accurately without adding explanations or extra output."
+                ]
+            )
+            st.session_state.pending_input = stt_response.text.strip()
             st.rerun()
 
-    with btn_col2:
-        send_pressed = st.button("Send", type="primary", use_container_width=True)
+    send_pressed = st.button("Send", type="primary", use_container_width=True)
 
 # Process Prompt
 if send_pressed:
@@ -359,6 +353,7 @@ if send_pressed:
         st.warning("Please enter a message.")
     else:
         st.session_state.pending_input = ""
+        st.session_state.pop("last_audio", None)
         st.session_state.analytics["total_requests"] += 1
         
         # Guardrails check
@@ -382,7 +377,7 @@ if send_pressed:
                 bilstm_latency_ms = (time.perf_counter() - t0_bilstm) * 1000
                 st.session_state.analytics["bilstm_latencies"].append(round(bilstm_latency_ms, 2))
 
-                # Step 2: FAISS Vector Retrieval (Searches all active docs)
+                # Step 2: FAISS Vector Retrieval
                 t0_faiss = time.perf_counter()
                 embedding_dim = 128
                 active_faiss_index, active_docs = build_faiss_index_for_docs(all_active_documents, tokenizer, embedding_dim)
