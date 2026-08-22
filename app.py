@@ -20,7 +20,7 @@ from documents import KNOWLEDGE_DOCUMENTS
 from guardrails import validate_user_input
 
 # Page Config
-st.set_page_config(page_title="BAOBAB AI - Multilingual RAG", page_icon="🌳", layout="wide")
+st.set_page_config(page_title="BAOBAB AI", page_icon="🌳", layout="wide")
 
 # Ensure persistent storage directory exists
 SAVES_DIR = "saved_chats"
@@ -137,35 +137,34 @@ def build_faiss_index_for_docs(docs, tokenizer, embedding_dim=128):
 all_active_documents = KNOWLEDGE_DOCUMENTS + st.session_state.custom_documents
 ALL_CATEGORIES = sorted(list(set(doc["category"] for doc in all_active_documents)))
 
-# --- Header Section ---
+# --- Title Header ---
 st.title("🌳 BAOBAB AI")
-st.caption("African Multilingual Intelligent Assistant powered by BiLSTM Language Classification & RAG Knowledge Retrieval.")
 
-# --- Main Page Ingestion Panel (Expander) ---
-with st.expander("📂 **Knowledge Ingestion Panel (Upload Documents or Take Photos)**", expanded=False):
+# --- Knowledge Ingestion Panel ---
+with st.expander("📂 **Upload Document or Take Photo**", expanded=False):
     ingest_col1, ingest_col2 = st.columns([2, 1])
     
     with ingest_col1:
-        ingest_source = st.radio("Select Input Method:", ["📄 Upload Document (PDF, DOCX, PPTX, TXT, Images)", "📷 Take Document Photo"], horizontal=True)
+        ingest_source = st.radio("Input Method:", ["📄 Upload Document", "📷 Take Photo"], horizontal=True)
         extracted_text = ""
         doc_title_name = ""
 
-        if ingest_source == "📄 Upload Document (PDF, DOCX, PPTX, TXT, Images)":
+        if ingest_source == "📄 Upload Document":
             uploaded_file = st.file_uploader(
-                "Upload Document File", 
+                "Select File", 
                 type=["txt", "pdf", "docx", "pptx", "jpg", "jpeg", "png"]
             )
             if uploaded_file is not None:
                 doc_title_name = uploaded_file.name
-                with st.spinner("Parsing document contents..."):
+                with st.spinner("Extracting text..."):
                     extracted_text = extract_text_from_file(uploaded_file, client_gemini=client)
         else:
-            camera_image = st.camera_input("Take a photo of your document")
+            camera_image = st.camera_input("Take photo")
             if camera_image is not None:
-                doc_title_name = f"Camera_Scan_{int(time.time())}.jpg"
-                with st.spinner("Running Vision OCR on camera photo..."):
+                doc_title_name = f"Scan_{int(time.time())}.jpg"
+                with st.spinner("Processing image..."):
                     img = Image.open(camera_image)
-                    prompt = "Extract and transcribe all readable text from this document image cleanly and accurately."
+                    prompt = "Extract and transcribe all readable text cleanly."
                     ocr_response = client.models.generate_content(
                         model='gemini-2.5-flash',
                         contents=[img, prompt]
@@ -173,11 +172,9 @@ with st.expander("📂 **Knowledge Ingestion Panel (Upload Documents or Take Pho
                     extracted_text = ocr_response.text.strip()
 
     with ingest_col2:
-        upload_category = st.text_input("Assign Knowledge Category", value="Custom Knowledge")
-        if extracted_text:
-            st.info(f"**Extracted Character Count:** {len(extracted_text)}")
+        upload_category = st.text_input("Category", value="Custom Knowledge")
         
-        if st.button("📥 Index into FAISS Vector DB", use_container_width=True):
+        if st.button("📥 Upload to Database", use_container_width=True):
             if extracted_text:
                 new_doc = {
                     "id": len(all_active_documents) + 1,
@@ -186,66 +183,60 @@ with st.expander("📂 **Knowledge Ingestion Panel (Upload Documents or Take Pho
                     "text": extracted_text
                 }
                 st.session_state.custom_documents.append(new_doc)
-                st.success(f"Indexed **{doc_title_name}** into BAOBAB AI!")
+                st.success(f"Added **{doc_title_name}**!")
                 st.rerun()
             else:
-                st.warning("No readable text found to index.")
+                st.warning("No readable text found.")
 
-# --- Chat Search & Rapid Navigation Panel ---
+# --- Chat Search & Navigation Panel ---
 if st.session_state.messages:
-    with st.expander("🔍 **Search Conversation & Jump to Message**", expanded=False):
+    with st.expander("🔍 **Search & Jump to Message**", expanded=False):
         nav_col1, nav_col2 = st.columns([1, 1])
         
-        # Keyword Search across active chat
         with nav_col1:
-            search_query = st.text_input("🔎 Search conversation keyword:", value="", placeholder="Type keyword to find...")
+            search_query = st.text_input("🔎 Search chat history:", value="", placeholder="Type to search...")
             if search_query.strip():
                 matches = [
                     (idx, msg) for idx, msg in enumerate(st.session_state.messages) 
                     if search_query.lower() in msg["content"].lower()
                 ]
                 if matches:
-                    st.success(f"Found {len(matches)} matching turn(s):")
+                    st.success(f"Found {len(matches)} match(es):")
                     for idx, match in matches:
-                        role_icon = "👤 User" if match["role"] == "user" else "🌳 BAOBAB AI"
-                        snippet = match["content"][:100] + "..." if len(match["content"]) > 100 else match["content"]
-                        st.markdown(f"**Turn #{idx+1} ({role_icon}):** {snippet}")
+                        role = "User" if match["role"] == "user" else "BAOBAB"
+                        snippet = match["content"][:80] + "..." if len(match["content"]) > 80 else match["content"]
+                        st.markdown(f"**Turn #{idx+1} ({role}):** {snippet}")
                 else:
-                    st.info("No matching text found in current session.")
+                    st.info("No matches found.")
         
-        # Message Selector Jump
         with nav_col2:
             options = [
-                f"Turn #{i+1}: ({'User' if msg['role'] == 'user' else 'BAOBAB'}) - {msg['content'][:40]}..."
+                f"Turn #{i+1}: ({'User' if msg['role'] == 'user' else 'BAOBAB'}) - {msg['content'][:30]}..."
                 for i, msg in enumerate(st.session_state.messages)
             ]
-            selected_turn = st.selectbox("🎯 Quick Jump to Message Turn", options=options)
+            selected_turn = st.selectbox("🎯 Quick Jump", options=options)
             if selected_turn:
                 selected_idx = int(selected_turn.split(":")[0].replace("Turn #", "")) - 1
                 target_msg = st.session_state.messages[selected_idx]
-                st.markdown(f"**Selected Content:**")
                 st.info(target_msg["content"])
-                if "metadata" in target_msg:
-                    st.caption(target_msg["metadata"])
 
 st.markdown("---")
 
 # --- Sidebar Controls ---
 with st.sidebar:
-    st.header("⚙️ BAOBAB AI Controls")
+    st.header("⚙️ Controls")
     target_language = st.selectbox(
-        "Target Output Language", 
+        "Output Language", 
         sorted(label_encoder.classes_), 
         index=sorted(label_encoder.classes_).index("Portuguese") if "Portuguese" in label_encoder.classes_ else 0
     )
     
     st.markdown("---")
-    st.header("🔍 RAG Knowledge Filters")
+    st.header("🔍 Domain Filters")
     selected_categories = st.multiselect(
-        "Filter Active Knowledge Domains",
+        "Active Categories",
         options=ALL_CATEGORIES,
-        default=ALL_CATEGORIES,
-        help="Restrict vector retrieval to specific categories."
+        default=ALL_CATEGORIES
     )
 
     st.markdown("---")
@@ -264,7 +255,7 @@ with st.sidebar:
             file_path = os.path.join(SAVES_DIR, f"{session_name.strip()}.json")
             with open(file_path, "w", encoding="utf-8") as f:
                 json.dump(save_payload, f, indent=2)
-            st.success(f"Saved **{session_name}.json**")
+            st.success("Session saved!")
             st.rerun()
 
     saved_files = [f.replace(".json", "") for f in os.listdir(SAVES_DIR) if f.endswith(".json")]
@@ -279,7 +270,7 @@ with st.sidebar:
                 st.session_state.analytics = loaded_data.get("analytics", st.session_state.analytics)
                 st.rerun()
 
-    if st.button("🗑️ Clear Chat History"):
+    if st.button("🗑️ Clear Chat"):
         st.session_state.messages = []
         st.session_state.analytics = {
             "bilstm_latencies": [],
@@ -303,8 +294,8 @@ with st.sidebar:
     f_latencies = st.session_state.analytics["faiss_latencies"]
 
     if b_latencies:
-        st.write(f"⚡ **BiLSTM Avg:** `{np.mean(b_latencies):.2f} ms`")
-        st.write(f"🔍 **FAISS Avg:** `{np.mean(f_latencies):.2f} ms`")
+        st.write(f"⚡ **BiLSTM:** `{np.mean(b_latencies):.2f} ms`")
+        st.write(f"🔍 **FAISS:** `{np.mean(f_latencies):.2f} ms`")
         st.line_chart({
             "BiLSTM (ms)": b_latencies,
             "FAISS (ms)": f_latencies
@@ -319,14 +310,14 @@ for msg in st.session_state.messages:
         if "audio" in msg and msg["audio"] is not None:
             st.audio(msg["audio"], format="audio/mp3")
 
-input_mode = st.radio("Choose Input Method:", ["💬 Text Input", "🎙️ Voice Input"], horizontal=True)
+input_mode = st.radio("Input Method:", ["💬 Text", "🎙️ Voice"], horizontal=True)
 
 user_input = ""
 
-if input_mode == "💬 Text Input":
+if input_mode == "💬 Text":
     user_input = st.text_input("Type your message here:", key="text_field")
 else:
-    st.write("Click below to record voice:")
+    st.write("Click below to record:")
     recorded_text = speech_to_text(
         start_prompt="🔴 Start Recording", 
         stop_prompt="⏹️ Stop Recording", 
@@ -335,15 +326,15 @@ else:
     )
     if recorded_text:
         user_input = recorded_text
-        st.success(f"Transcribed Text: **{user_input}**")
+        st.success(f"Transcribed: **{user_input}**")
 
-if st.button("Send Request", type="primary"):
+if st.button("Send", type="primary"):
     if not user_input.strip():
-        st.warning("Please provide input.")
+        st.warning("Please enter a message.")
     else:
         st.session_state.analytics["total_requests"] += 1
         
-        # Step 0: Guardrails
+        # Guardrails check
         is_safe, guardrail_msg = validate_user_input(user_input)
         
         if not is_safe:
@@ -352,7 +343,7 @@ if st.button("Send Request", type="primary"):
         else:
             st.session_state.messages.append({"role": "user", "content": user_input})
             
-            with st.status("Executing BAOBAB AI Pipeline...", expanded=True) as status:
+            with st.spinner("Processing..."):
                 # Step 1: BiLSTM Detection
                 t0_bilstm = time.perf_counter()
                 seq = tokenizer.texts_to_sequences([user_input])
@@ -399,7 +390,7 @@ if st.button("Send Request", type="primary"):
                 history_context = "".join([f"{m['role'].upper()}: {m['content']}\n" for m in st.session_state.messages[:-1]])
 
                 prompt_sent = f"""SYSTEM INSTRUCTION:
-You are BAOBAB AI, an expert African multilingual AI assistant.
+You are BAOBAB AI, an expert assistant.
 Detected Input Language: {detected_lang} (Confidence: {confidence:.1f}%).
 TARGET OUTPUT LANGUAGE: Compose your response strictly in {target_language}.
 
@@ -422,7 +413,7 @@ RESPONSE ({target_language}):"""
                 except Exception as e:
                     ai_output = f"Error: {str(e)}"
 
-                # Step 5: TTS
+                # Step 5: TTS Synthesis
                 audio_bytes = None
                 selected_tts_lang = TTS_LANG_MAP.get(target_language, 'en')
                 try:
@@ -433,10 +424,8 @@ RESPONSE ({target_language}):"""
                 except Exception:
                     pass
 
-                status.update(label="Complete!", state="complete", expanded=False)
-
-            # Metadata
-            metadata = f"🧠 Detected **{detected_lang}** ({confidence:.1f}%) | 📄 Context: *{doc_title}* | ⏱️ BiLSTM: `{bilstm_latency_ms:.1f}ms` | FAISS: `{faiss_latency_ms:.1f}ms`"
+            # Record metadata and append to chat
+            metadata = f"🧠 **{detected_lang}** ({confidence:.1f}%) | 📄 Context: *{doc_title}* | ⏱️ BiLSTM: `{bilstm_latency_ms:.1f}ms` | FAISS: `{faiss_latency_ms:.1f}ms`"
             st.session_state.messages.append({
                 "role": "assistant", 
                 "content": ai_output, 
