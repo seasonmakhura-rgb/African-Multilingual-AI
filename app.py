@@ -50,6 +50,9 @@ if "analytics" not in st.session_state:
 if "custom_documents" not in st.session_state:
     st.session_state.custom_documents = []
 
+if "pending_input" not in st.session_state:
+    st.session_state.pending_input = ""
+
 # Gemini API Client setup
 api_key = st.secrets.get("GEMINI_API_KEY", os.environ.get("GEMINI_API_KEY"))
 client = genai.Client(api_key=api_key)
@@ -58,11 +61,9 @@ client = genai.Client(api_key=api_key)
 def extract_text_from_file(uploaded_file, client_gemini=None):
     filename = uploaded_file.name.lower()
     
-    # 1. Plain Text File (.txt)
     if filename.endswith(".txt"):
         return uploaded_file.read().decode("utf-8").strip()
 
-    # 2. PDF File (.pdf)
     elif filename.endswith(".pdf"):
         pdf_reader = pypdf.PdfReader(uploaded_file)
         text_content = []
@@ -72,12 +73,10 @@ def extract_text_from_file(uploaded_file, client_gemini=None):
                 text_content.append(extracted)
         return "\n".join(text_content).strip()
 
-    # 3. Word Document (.docx)
     elif filename.endswith(".docx"):
         doc = docx.Document(uploaded_file)
         return "\n".join([p.text for p in doc.paragraphs if p.text.strip()]).strip()
 
-    # 4. PowerPoint Presentation (.pptx)
     elif filename.endswith(".pptx"):
         prs = pptx.Presentation(uploaded_file)
         text_content = []
@@ -87,7 +86,6 @@ def extract_text_from_file(uploaded_file, client_gemini=None):
                     text_content.append(shape.text)
         return "\n".join(text_content).strip()
 
-    # 5. Image Files (.jpg, .jpeg, .png) via Gemini Vision OCR
     elif filename.endswith((".jpg", ".jpeg", ".png")):
         image = Image.open(uploaded_file)
         prompt = "Extract and transcribe all readable text from this document image cleanly and accurately. Do not add commentary."
@@ -137,90 +135,8 @@ def build_faiss_index_for_docs(docs, tokenizer, embedding_dim=128):
 all_active_documents = KNOWLEDGE_DOCUMENTS + st.session_state.custom_documents
 ALL_CATEGORIES = sorted(list(set(doc["category"] for doc in all_active_documents)))
 
-# --- Title Header ---
+# --- Header ---
 st.title("🌳 BAOBAB AI")
-
-# --- Knowledge Ingestion Panel ---
-with st.expander("📂 **Upload Document or Take Photo**", expanded=False):
-    ingest_col1, ingest_col2 = st.columns([2, 1])
-    
-    with ingest_col1:
-        ingest_source = st.radio("Input Method:", ["📄 Upload Document", "📷 Take Photo"], horizontal=True)
-        extracted_text = ""
-        doc_title_name = ""
-
-        if ingest_source == "📄 Upload Document":
-            uploaded_file = st.file_uploader(
-                "Select File", 
-                type=["txt", "pdf", "docx", "pptx", "jpg", "jpeg", "png"]
-            )
-            if uploaded_file is not None:
-                doc_title_name = uploaded_file.name
-                with st.spinner("Extracting text..."):
-                    extracted_text = extract_text_from_file(uploaded_file, client_gemini=client)
-        else:
-            camera_image = st.camera_input("Take photo")
-            if camera_image is not None:
-                doc_title_name = f"Scan_{int(time.time())}.jpg"
-                with st.spinner("Processing image..."):
-                    img = Image.open(camera_image)
-                    prompt = "Extract and transcribe all readable text cleanly."
-                    ocr_response = client.models.generate_content(
-                        model='gemini-2.5-flash',
-                        contents=[img, prompt]
-                    )
-                    extracted_text = ocr_response.text.strip()
-
-    with ingest_col2:
-        upload_category = st.text_input("Category", value="Custom Knowledge")
-        
-        if st.button("📥 Upload to Database", use_container_width=True):
-            if extracted_text:
-                new_doc = {
-                    "id": len(all_active_documents) + 1,
-                    "title": doc_title_name,
-                    "category": upload_category.strip() if upload_category.strip() else "Custom Knowledge",
-                    "text": extracted_text
-                }
-                st.session_state.custom_documents.append(new_doc)
-                st.success(f"Added **{doc_title_name}**!")
-                st.rerun()
-            else:
-                st.warning("No readable text found.")
-
-# --- Chat Search & Navigation Panel ---
-if st.session_state.messages:
-    with st.expander("🔍 **Search & Jump to Message**", expanded=False):
-        nav_col1, nav_col2 = st.columns([1, 1])
-        
-        with nav_col1:
-            search_query = st.text_input("🔎 Search chat history:", value="", placeholder="Type to search...")
-            if search_query.strip():
-                matches = [
-                    (idx, msg) for idx, msg in enumerate(st.session_state.messages) 
-                    if search_query.lower() in msg["content"].lower()
-                ]
-                if matches:
-                    st.success(f"Found {len(matches)} match(es):")
-                    for idx, match in matches:
-                        role = "User" if match["role"] == "user" else "BAOBAB"
-                        snippet = match["content"][:80] + "..." if len(match["content"]) > 80 else match["content"]
-                        st.markdown(f"**Turn #{idx+1} ({role}):** {snippet}")
-                else:
-                    st.info("No matches found.")
-        
-        with nav_col2:
-            options = [
-                f"Turn #{i+1}: ({'User' if msg['role'] == 'user' else 'BAOBAB'}) - {msg['content'][:30]}..."
-                for i, msg in enumerate(st.session_state.messages)
-            ]
-            selected_turn = st.selectbox("🎯 Quick Jump", options=options)
-            if selected_turn:
-                selected_idx = int(selected_turn.split(":")[0].replace("Turn #", "")) - 1
-                target_msg = st.session_state.messages[selected_idx]
-                st.info(target_msg["content"])
-
-st.markdown("---")
 
 # --- Sidebar Controls ---
 with st.sidebar:
@@ -310,28 +226,98 @@ for msg in st.session_state.messages:
         if "audio" in msg and msg["audio"] is not None:
             st.audio(msg["audio"], format="audio/mp3")
 
-input_mode = st.radio("Input Method:", ["💬 Text", "🎙️ Voice"], horizontal=True)
+st.markdown("---")
 
-user_input = ""
+# --- Attachment Popover and Action Bar ---
+input_col1, input_col2, input_col3 = st.columns([1, 8, 1])
 
-if input_mode == "💬 Text":
-    user_input = st.text_input("Type your message here:", key="text_field")
-else:
-    st.write("Click below to record:")
-    recorded_text = speech_to_text(
-        start_prompt="🔴 Start Recording", 
-        stop_prompt="⏹️ Stop Recording", 
-        just_once=False, 
-        key='stt'
+with input_col1:
+    with st.popover("➕", help="Add attachments or voice"):
+        tab_file, tab_photo, tab_voice = st.tabs(["📄 Upload", "📷 Camera", "🎙️ Voice"])
+        
+        with tab_file:
+            uploaded_file = st.file_uploader(
+                "Upload File / Image", 
+                type=["txt", "pdf", "docx", "pptx", "jpg", "jpeg", "png"],
+                key="attachment_file"
+            )
+            upload_category = st.text_input("Category", value="Custom Knowledge", key="file_cat")
+            if st.button("📥 Attach File", key="btn_attach_file"):
+                if uploaded_file is not None:
+                    with st.spinner("Extracting text..."):
+                        ext_text = extract_text_from_file(uploaded_file, client_gemini=client)
+                    if ext_text:
+                        new_doc = {
+                            "id": len(all_active_documents) + 1,
+                            "title": uploaded_file.name,
+                            "category": upload_category.strip() if upload_category.strip() else "Custom Knowledge",
+                            "text": ext_text
+                        }
+                        st.session_state.custom_documents.append(new_doc)
+                        st.success(f"Attached **{uploaded_file.name}**!")
+                    else:
+                        st.warning("No readable text found.")
+                else:
+                    st.info("Select a file first.")
+
+        with tab_photo:
+            camera_image = st.camera_input("Take photo", key="attachment_cam")
+            photo_category = st.text_input("Category", value="Custom Knowledge", key="cam_cat")
+            if st.button("📥 Attach Scan", key="btn_attach_cam"):
+                if camera_image is not None:
+                    with st.spinner("Processing image..."):
+                        img = Image.open(camera_image)
+                        prompt = "Extract and transcribe all readable text cleanly."
+                        ocr_resp = client.models.generate_content(
+                            model='gemini-2.5-flash',
+                            contents=[img, prompt]
+                        )
+                        ext_text = ocr_resp.text.strip()
+                    if ext_text:
+                        doc_name = f"Scan_{int(time.time())}.jpg"
+                        new_doc = {
+                            "id": len(all_active_documents) + 1,
+                            "title": doc_name,
+                            "category": photo_category.strip() if photo_category.strip() else "Custom Knowledge",
+                            "text": ext_text
+                        }
+                        st.session_state.custom_documents.append(new_doc)
+                        st.success("Photo attached to Knowledge Base!")
+                    else:
+                        st.warning("No text detected in photo.")
+                else:
+                    st.info("Capture a photo first.")
+
+        with tab_voice:
+            st.write("Record spoken prompt:")
+            recorded_text = speech_to_text(
+                start_prompt="🔴 Record", 
+                stop_prompt="⏹️ Stop", 
+                just_once=False, 
+                key='stt_popover'
+            )
+            if recorded_text:
+                st.session_state.pending_input = recorded_text
+                st.success(f"Captured: '{recorded_text}'")
+
+with input_col2:
+    user_input = st.text_input(
+        "Prompt",
+        value=st.session_state.pending_input,
+        placeholder="Ask BAOBAB AI...",
+        label_visibility="collapsed",
+        key="main_prompt_field"
     )
-    if recorded_text:
-        user_input = recorded_text
-        st.success(f"Transcribed: **{user_input}**")
 
-if st.button("Send", type="primary"):
+with input_col3:
+    send_pressed = st.button("Send", type="primary", use_container_width=True)
+
+# Process Prompt
+if send_pressed:
     if not user_input.strip():
         st.warning("Please enter a message.")
     else:
+        st.session_state.pending_input = ""
         st.session_state.analytics["total_requests"] += 1
         
         # Guardrails check
