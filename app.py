@@ -8,9 +8,11 @@ from tensorflow.keras.preprocessing.sequence import pad_sequences
 from google import genai
 from streamlit_mic_recorder import speech_to_text
 from gtts import gTTS
+import faiss
+from documents import KNOWLEDGE_DOCUMENTS
 
 # Page Config
-st.set_page_config(page_title="African Multilingual AI Assistant", page_icon="🌍")
+st.set_page_config(page_title="African Multilingual RAG AI", page_icon="🌍")
 
 # Dynamic TTS Language Mapping
 TTS_LANG_MAP = {
@@ -21,29 +23,48 @@ TTS_LANG_MAP = {
     'Spanish': 'es'
 }
 
-# Initialize Persistent Session State Chat Memory
+# Initialize Chat Memory
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Load Classifier Artifacts
+# Load Classifier Artifacts & Build FAISS RAG Index
 @st.cache_resource
-def load_artifacts():
+def load_system_resources():
     model = tf.keras.models.load_model('african_lang_classifier.keras')
     with open('word_tokenizer.pkl', 'rb') as f:
         tokenizer = pickle.load(f)
     with open('label_encoder.pkl', 'rb') as f:
         label_encoder = pickle.load(f)
-    return model, tokenizer, label_encoder
 
-model, tokenizer, label_encoder = load_artifacts()
+    # Build Lightweight FAISS Vector Index using Tokenizer Bag-of-Words Embeddings
+    embedding_dim = 128
+    np.random.seed(42)
+    # Generate deterministic vectors for knowledge documents
+    doc_vectors = []
+    for doc in KNOWLEDGE_DOCUMENTS:
+        seq = tokenizer.texts_to_sequences([doc['text']])
+        vec = np.zeros(embedding_dim, dtype='float32')
+        if seq[0]:
+            for idx in seq[0][:embedding_dim]:
+                vec[idx % embedding_dim] += 1.0
+        doc_vectors.append(vec)
+    
+    doc_matrix = np.array(doc_vectors).astype('float32')
+    faiss.normalize_L2(doc_matrix)
+    index = faiss.IndexFlatIP(embedding_dim)
+    index.add(doc_matrix)
+
+    return model, tokenizer, label_encoder, index, embedding_dim
+
+model, tokenizer, label_encoder, faiss_index, embedding_dim = load_system_resources()
 
 # Gemini API Client setup
 api_key = st.secrets.get("GEMINI_API_KEY", os.environ.get("GEMINI_API_KEY"))
 client = genai.Client(api_key=api_key)
 
 # App UI
-st.title("🌍 African Multilingual AI Assistant")
-st.write("Detects 16 languages using a custom BiLSTM neural network and remembers full multi-turn conversations.")
+st.title("🌍 African Multilingual AI Assistant (RAG Enabled)")
+st.write("Integrates custom BiLSTM language classification with FAISS vector retrieval and Gemini LLM synthesis.")
 
 # Sidebar Controls
 with st.sidebar:
@@ -57,7 +78,7 @@ with st.sidebar:
         st.session_state.messages = []
         st.rerun()
 
-# Render Existing Conversation History
+# Render History
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
@@ -87,35 +108,43 @@ if st.button("Send Request", type="primary"):
     if not user_input.strip():
         st.warning("Please provide a text input or speak into the microphone.")
     else:
-        # Append User Message to Session State
         st.session_state.messages.append({"role": "user", "content": user_input})
         
-        # Step 1: Preprocess & Predict Language via BiLSTM
-        with st.status("Processing Multi-Turn Request...", expanded=True) as status:
-            st.write("🧠 Classifying language with BiLSTM model...")
+        with st.status("Executing RAG & Multi-Turn Pipeline...", expanded=True) as status:
+            # Step 1: BiLSTM Language Detection
+            st.write("🧠 Classifying user language with BiLSTM model...")
             seq = tokenizer.texts_to_sequences([user_input])
             padded = pad_sequences(seq, maxlen=50)
             preds = model.predict(padded)
             detected_lang = label_encoder.inverse_transform([np.argmax(preds)])[0]
             confidence = float(np.max(preds)) * 100
 
-            # Step 2: Build Multi-Turn Conversation Prompt
-            st.write("📚 Assembling chat context for Gemini LLM...")
+            # Step 2: RAG Retrieval via FAISS
+            st.write("🔍 Querying FAISS Vector Database for context...")
+            q_vec = np.zeros(embedding_dim, dtype='float32')
+            if seq[0]:
+                for idx in seq[0][:embedding_dim]:
+                    q_vec[idx % embedding_dim] += 1.0
+            q_matrix = np.array([q_vec]).astype('float32')
+            faiss.normalize_L2(q_matrix)
             
+            distances, indices = faiss_index.search(q_matrix, k=1)
+            retrieved_doc = KNOWLEDGE_DOCUMENTS[indices[0][0]]
+            rag_context = retrieved_doc["text"]
+            st.write(f"📄 Retrieved Document: **{retrieved_doc['title']}**")
+
+            # Step 3: System Prompt Construction
             history_context = ""
             for past_msg in st.session_state.messages[:-1]:
                 history_context += f"{past_msg['role'].upper()}: {past_msg['content']}\n"
 
-            if confidence >= 75.0:
-                lang_context = f"Detected Input Language: {detected_lang} (High Confidence: {confidence:.1f}%)."
-            else:
-                lang_context = f"Detected Input Language might be {detected_lang} (Lower Confidence: {confidence:.1f}%). Account for potential language ambiguity."
-
             prompt_sent = f"""SYSTEM INSTRUCTION:
 You are an expert multilingual AI assistant.
-{lang_context}
+Detected Input Language from User: {detected_lang} (Confidence: {confidence:.1f}%).
 TARGET OUTPUT LANGUAGE ENFORCEMENT: Regardless of the input language, you MUST compose your entire response strictly in {target_language}.
-Maintain conversational continuity using past messages provided below.
+
+RETRIEVED KNOWLEDGE CONTEXT (RAG):
+{rag_context}
 
 CONVERSATION HISTORY:
 {history_context if history_context else "No prior context."}
@@ -123,8 +152,8 @@ CONVERSATION HISTORY:
 CURRENT USER QUERY: {user_input}
 RESPONSE ({target_language}):"""
 
-            # Step 3: Call Gemini API
-            st.write("🚀 Generating contextual response...")
+            # Step 4: Call Gemini API
+            st.write("🚀 Generating grounded AI response...")
             try:
                 response = client.models.generate_content(
                     model='gemini-3.6-flash',
@@ -134,15 +163,12 @@ RESPONSE ({target_language}):"""
             except Exception as e:
                 ai_output = f"Error: {str(e)}"
 
-            status.update(label="Complete!", state="complete", expanded=False)
+            status.update(label="RAG Pipeline Execution Complete!", state="complete", expanded=False)
 
-        # Meta string for history UI
-        metadata = f"🧠 Detected **{detected_lang}** ({confidence:.1f}% confidence)"
-
-        # Append AI Response to Session State
+        metadata = f"🧠 Detected **{detected_lang}** ({confidence:.1f}%) | 📄 Knowledge Context: *{retrieved_doc['title']}*"
         st.session_state.messages.append({"role": "assistant", "content": ai_output, "metadata": metadata})
 
-        # Step 4: Dynamic Language Audio Routing (TTS)
+        # Step 5: TTS Speech Synthesis
         selected_tts_lang = TTS_LANG_MAP.get(target_language, 'en')
         try:
             tts = gTTS(text=ai_output, lang=selected_tts_lang)
