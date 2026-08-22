@@ -22,6 +22,9 @@ from guardrails import validate_user_input
 # Page Config
 st.set_page_config(page_title="BAOBAB AI", page_icon="🌳", layout="wide")
 
+# Target Gemini Model Identifier
+GEMINI_MODEL = "gemini-3.6-flash"
+
 # Ensure persistent storage directory exists
 SAVES_DIR = "saved_chats"
 os.makedirs(SAVES_DIR, exist_ok=True)
@@ -72,7 +75,7 @@ def transcribe_audio_callback():
             )
             
             stt_response = client.models.generate_content(
-                model='gemini-2.5-flash',
+                model=GEMINI_MODEL,
                 contents=[
                     audio_part,
                     "Transcribe the spoken audio into text accurately without adding explanations or extra output."
@@ -116,7 +119,7 @@ def extract_text_from_file(uploaded_file, client_gemini=None):
         image = Image.open(uploaded_file)
         prompt = "Extract and transcribe all readable text from this document image cleanly and accurately. Do not add commentary."
         response = client_gemini.models.generate_content(
-            model='gemini-2.5-flash',
+            model=GEMINI_MODEL,
             contents=[image, prompt]
         )
         return response.text.strip()
@@ -324,7 +327,7 @@ with input_col1:
                         img = Image.open(camera_image)
                         prompt = "Extract and transcribe all readable text cleanly."
                         ocr_resp = client.models.generate_content(
-                            model='gemini-2.5-flash',
+                            model=GEMINI_MODEL,
                             contents=[img, prompt]
                         )
                         ext_text = ocr_resp.text.strip()
@@ -442,7 +445,7 @@ RESPONSE ({target_language}):"""
                 # Step 4: Call Gemini API
                 try:
                     response = client.models.generate_content(
-                        model='gemini-2.5-flash',
+                        model=GEMINI_MODEL,
                         contents=prompt_sent
                     )
                     ai_output = response.text
