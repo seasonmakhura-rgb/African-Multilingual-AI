@@ -36,7 +36,7 @@ def load_system_resources():
     with open('label_encoder.pkl', 'rb') as f:
         label_encoder = pickle.load(f)
 
-    # Build Lightweight FAISS Vector Index using Tokenizer Bag-of-Words Embeddings
+    # Build Lightweight FAISS Vector Index
     embedding_dim = 128
     np.random.seed(42)
     doc_vectors = []
@@ -77,12 +77,14 @@ with st.sidebar:
         st.session_state.messages = []
         st.rerun()
 
-# Render History
+# Render History (with persistent audio players)
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
         if "metadata" in msg:
             st.caption(msg["metadata"])
+        if "audio" in msg and msg["audio"] is not None:
+            st.audio(msg["audio"], format="audio/mp3")
 
 # Input Mode Selection
 input_mode = st.radio("Choose Input Method:", ["💬 Text Input", "🎙️ Voice Input"], horizontal=True)
@@ -175,20 +177,27 @@ RESPONSE ({target_language}):"""
             except Exception as e:
                 ai_output = f"Error: {str(e)}"
 
+            # Step 5: Generate Speech & Convert to Bytes
+            st.write("🔊 Synthesizing speech output...")
+            audio_bytes = None
+            selected_tts_lang = TTS_LANG_MAP.get(target_language, 'en')
+            try:
+                tts = gTTS(text=ai_output, lang=selected_tts_lang)
+                fp = io.BytesIO()
+                tts.write_to_fp(fp)
+                audio_bytes = fp.getvalue()
+            except Exception:
+                pass
+
             status.update(label="RAG Pipeline Execution Complete!", state="complete", expanded=False)
 
+        # Store message, metadata AND audio bytes together in state
         metadata = f"🧠 Detected **{detected_lang}** ({confidence:.1f}%) | 📄 Knowledge Context: *{doc_title}*"
-        st.session_state.messages.append({"role": "assistant", "content": ai_output, "metadata": metadata})
-
-        # Step 5: TTS Speech Synthesis
-        selected_tts_lang = TTS_LANG_MAP.get(target_language, 'en')
-        try:
-            tts = gTTS(text=ai_output, lang=selected_tts_lang)
-            fp = io.BytesIO()
-            tts.write_to_fp(fp)
-            fp.seek(0)
-            st.audio(fp, format='audio/mp3')
-        except Exception:
-            pass
+        st.session_state.messages.append({
+            "role": "assistant", 
+            "content": ai_output, 
+            "metadata": metadata,
+            "audio": audio_bytes
+        })
 
         st.rerun()
