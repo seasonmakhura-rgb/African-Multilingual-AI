@@ -6,7 +6,7 @@ import streamlit as st
 import tensorflow as tf
 from tensorflow.keras.preprocessing.sequence import pad_sequences
 from google import genai
-from streamlit_mic_recorder import mic_recorder
+from streamlit_mic_recorder import speech_to_text
 from gtts import gTTS
 
 # Page Config
@@ -29,27 +29,30 @@ api_key = st.secrets.get("GEMINI_API_KEY", os.environ.get("GEMINI_API_KEY"))
 client = genai.Client(api_key=api_key)
 
 # App UI
-st.title("🌍 African Multilingual AI Assistant (Voice-Enabled)")
-st.write("Detects 16 languages using a custom BiLSTM neural network and responds in your chosen language with voice output.")
+st.title("🌍 African Multilingual AI Assistant")
+st.write("Detects 16 languages using a custom BiLSTM neural network and responds in your chosen language.")
 
-# Input Mode Tabs
-tab1, tab2 = st.tabs(["💬 Text Input", "🎙️ Voice Input"])
+# Input Mode Selection
+input_mode = st.radio("Choose Input Method:", ["💬 Text Input", "🎙️ Voice Input"], horizontal=True)
 
 user_input = ""
 
-with tab1:
-    text_val = st.text_area("Type your message here:", placeholder="e.g., Habari yako, o kae?")
-    if text_val:
-        user_input = text_val
+if input_mode == "💬 Text Input":
+    user_input = st.text_area("Type your message here:", placeholder="e.g., Habari yako, o kae?")
+else:
+    st.write("Click below, speak, and click stop to transcribe:")
+    # Speech-to-Text converts audio bytes to text directly
+    recorded_text = speech_to_text(
+        start_prompt="🔴 Start Recording", 
+        stop_prompt="⏹️ Stop Recording", 
+        just_once=False, 
+        key='stt'
+    )
+    if recorded_text:
+        user_input = recorded_text
+        st.success(f"Transcribed Text: **{user_input}**")
 
-with tab2:
-    st.write("Record your query directly:")
-    audio_record = mic_recorder(start_prompt="🔴 Start Recording", stop_prompt="⏹️ Stop Recording", key='recorder')
-    if audio_record:
-        st.audio(audio_record['bytes'], format='audio/wav')
-        st.info("Audio captured successfully! (Type/confirm query below or use text mode for high-accuracy local dialects).")
-
-# Select Target Language
+# Select Target Output Language
 target_language = st.selectbox(
     "Select Target Output Language", 
     sorted(label_encoder.classes_), 
@@ -58,7 +61,7 @@ target_language = st.selectbox(
 
 if st.button("Send Request", type="primary"):
     if not user_input.strip():
-        st.warning("Please enter a text message or record your voice.")
+        st.warning("Please provide a text input or speak into the microphone.")
     else:
         # 1. Preprocess & Predict Language
         seq = tokenizer.texts_to_sequences([user_input])
@@ -67,7 +70,7 @@ if st.button("Send Request", type="primary"):
         detected_lang = label_encoder.inverse_transform([np.argmax(preds)])[0]
         confidence = float(np.max(preds)) * 100
 
-        # 2. Build Prompt
+        # 2. Build System Prompt
         prompt_sent = f"""SYSTEM INSTRUCTION:
 You are an expert multilingual AI assistant.
 Detected Input Language from User: {detected_lang} (Confidence: {confidence:.1f}%).
@@ -76,7 +79,7 @@ TARGET OUTPUT LANGUAGE ENFORCEMENT: Regardless of the input language, you MUST c
 USER QUERY: {user_input}
 RESPONSE ({target_language}):"""
 
-        # 3. Call Gemini
+        # 3. Call Gemini API
         with st.spinner("Generating AI response..."):
             try:
                 response = client.models.generate_content(
@@ -87,20 +90,17 @@ RESPONSE ({target_language}):"""
             except Exception as e:
                 ai_output = f"Error: {str(e)}"
 
-        # Display Text Outputs
+        # Display Results
         st.success(f"🧠 **Classifier Output:** Detected **{detected_lang}** ({confidence:.1f}% confidence)")
         st.markdown("### AI Response")
         st.write(ai_output)
 
-        # 4. Generate & Play Audio Response
+        # 4. Generate & Play Spoken Response (TTS)
         try:
-            tts = gTTS(text=ai_output, lang='en' if target_language not in ['Portuguese', 'French', 'Swahili'] else 'pt')
+            tts = gTTS(text=ai_output, lang='pt' if target_language == 'Portuguese' else 'en')
             fp = io.BytesIO()
             tts.write_to_fp(fp)
             fp.seek(0)
             st.audio(fp, format='audio/mp3')
-        except Exception as e:
-            st.warning("Speech synthesis unavailable for this language code.")
-
-        with st.expander("🔍 View Full Backend System Prompt"):
-            st.code(prompt_sent)
+        except Exception:
+            pass
