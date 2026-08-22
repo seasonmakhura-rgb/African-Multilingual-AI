@@ -2,6 +2,7 @@ import os
 import pickle
 import numpy as np
 import streamlit as st
+import sklearn
 import tensorflow as tf
 from tensorflow.keras.preprocessing.sequence import pad_sequences
 from google import genai
