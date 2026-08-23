@@ -37,7 +37,7 @@ TTS_LANG_MAP = {
     'Spanish': 'es'
 }
 
-# --- CSS Styling for Responsive Dock Bar & Clean Sidebar ---
+# --- CSS Styling for Clean Gemini Dock & Sidebar ---
 st.markdown("""
 <style>
     .block-container {
@@ -50,11 +50,11 @@ st.markdown("""
         border-right: 1px solid #e9ecef;
     }
 
-    /* Fixed Bottom Dock Container - Tightened to fit all screens */
+    /* Fixed Bottom Dock Container */
     div[data-testid="stHorizontalBlock"]:has(div.gemini-dock-marker) {
         position: fixed;
         bottom: 20px;
-        left: 21%;
+        left: 20%;
         right: 4%;
         max-width: 76%;
         background-color: #f0f4f9;
@@ -82,7 +82,7 @@ st.markdown("""
         background-color: #e1e5ea !important;
     }
 
-    /* Seamless Prompt Input Field */
+    /* Seamless Prompt Input */
     div[data-testid="stTextInput"] > div > div > input {
         border: none !important;
         background: transparent !important;
@@ -96,7 +96,7 @@ st.markdown("""
         background: transparent !important;
     }
 
-    /* Compact Audio Input Component */
+    /* Compact Left-side Audio Recorder */
     div[data-testid="stAudioInput"] {
         background: transparent !important;
         border: none !important;
@@ -357,8 +357,8 @@ for i, msg in enumerate(st.session_state.messages):
         if "audio" in msg and msg["audio"] is not None:
             st.audio(msg["audio"], format="audio/mp3")
 
-# --- Balanced Input Dock Layout ---
-dock_col1, dock_col2, dock_col3, dock_col4 = st.columns([0.5, 5.0, 3.5, 0.6])
+# --- Balanced Input Dock Layout (Mic placed on the left side) ---
+dock_col1, dock_col2, dock_col3, dock_col4 = st.columns([0.5, 2.5, 5.5, 0.6])
 
 with dock_col1:
     st.markdown('<div class="gemini-dock-marker"></div>', unsafe_allow_html=True)
@@ -417,10 +417,10 @@ with dock_col1:
                             st.error(f"Image generation error: {str(e)}")
 
 with dock_col2:
-    user_prompt = st.text_input("Ask Baobab", value=st.session_state.pending_input, placeholder="Ask Baobab...", label_visibility="collapsed", key="dock_prompt_input")
+    st.audio_input("Record audio note", label_visibility="collapsed", key="dock_mic_input", on_change=transcribe_audio_callback)
 
 with dock_col3:
-    st.audio_input("Record audio note", label_visibility="collapsed", key="dock_mic_input", on_change=transcribe_audio_callback)
+    user_prompt = st.text_input("Ask Baobab", value=st.session_state.pending_input, placeholder="Ask Baobab...", label_visibility="collapsed", key="dock_prompt_input")
 
 with dock_col4:
     send_clicked = st.button("➔", type="primary", key="dock_send_btn")
@@ -491,7 +491,7 @@ RESPONSE ({target_language}):"""
                 if enable_web_search:
                     tools_list.append({"google_search": {}})
                 if enable_code_interpreter:
-                    tools_list.append(types.Tool(code_execution=types.CodeExecution()))
+                    tools_list.append({"code_execution": {}})
                 if enable_function_calling:
                     tools_list.append(types.Tool(function_declarations=[weather_declaration, loan_declaration]))
 
