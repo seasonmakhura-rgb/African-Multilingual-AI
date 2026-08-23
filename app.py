@@ -22,7 +22,7 @@ from guardrails import validate_user_input
 # Page Config
 st.set_page_config(page_title="BAOBAB AI", page_icon="🌳", layout="wide")
 
-# Target Gemini & Imagen Model Identifiers
+# Target Model Identifiers
 GEMINI_MODEL = "gemini-3.6-flash"
 IMAGEN_MODEL = "imagen-3.0-generate-002"
 
@@ -37,12 +37,12 @@ TTS_LANG_MAP = {
     'Spanish': 'es'
 }
 
-# --- CSS Styling for Clean Gemini Dock & Sidebar ---
+# --- CSS Styling for Responsive Dock Bar & Clean Sidebar ---
 st.markdown("""
 <style>
     .block-container {
         padding-top: 2rem;
-        padding-bottom: 7rem;
+        padding-bottom: 8rem;
     }
     
     section[data-testid="stSidebar"] {
@@ -50,46 +50,69 @@ st.markdown("""
         border-right: 1px solid #e9ecef;
     }
 
-    /* Fixed Bottom Dock Container */
+    /* Fixed Bottom Dock Container - Tightened to fit all screens */
     div[data-testid="stHorizontalBlock"]:has(div.gemini-dock-marker) {
         position: fixed;
-        bottom: 25px;
-        left: 20%;
-        right: 5%;
+        bottom: 20px;
+        left: 21%;
+        right: 4%;
+        max-width: 76%;
         background-color: #f0f4f9;
         border-radius: 28px;
-        padding: 6px 16px;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        padding: 4px 12px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.12);
         z-index: 9999;
         align-items: center;
+        overflow: visible !important;
     }
 
     /* Attachment Popover (+ Button) Styling */
     div[data-testid="stPopover"] > button {
         border: none !important;
         background: transparent !important;
-        font-size: 22px !important;
+        font-size: 20px !important;
         border-radius: 50% !important;
-        width: 42px !important;
-        height: 42px !important;
+        width: 38px !important;
+        height: 38px !important;
         color: #444746 !important;
+        margin: 0 !important;
     }
     
     div[data-testid="stPopover"] > button:hover {
         background-color: #e1e5ea !important;
     }
 
-    /* Seamless Prompt Input */
+    /* Seamless Prompt Input Field */
     div[data-testid="stTextInput"] > div > div > input {
         border: none !important;
         background: transparent !important;
         box-shadow: none !important;
-        font-size: 16px !important;
+        font-size: 15px !important;
+        padding-left: 5px !important;
     }
     
     div[data-testid="stTextInput"] > div > div {
         border: none !important;
         background: transparent !important;
+    }
+
+    /* Compact Audio Input Component */
+    div[data-testid="stAudioInput"] {
+        background: transparent !important;
+        border: none !important;
+        padding: 0 !important;
+        margin: 0 !important;
+    }
+    
+    /* Primary Send Button Adjustment */
+    div[data-testid="stButton"] > button[kind="primary"] {
+        border-radius: 50% !important;
+        width: 38px !important;
+        height: 38px !important;
+        padding: 0 !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -276,7 +299,7 @@ for doc in KNOWLEDGE_DOCUMENTS:
 
 all_active_documents = tagged_base_docs + st.session_state.custom_documents
 
-# --- Left Sidebar Navigation & Controls ---
+# --- Left Sidebar Navigation ---
 with st.sidebar:
     st.markdown("### 🌳 BAOBAB AI")
     
@@ -319,10 +342,10 @@ with st.sidebar:
         enable_function_calling = st.toggle("API Tool Calling", value=True)
         custom_persona = st.text_area("Persona Instructions", value="You are BAOBAB AI, an expert, helpful assistant.")
 
-# --- Main Interface ---
+# --- Main Area ---
 st.markdown("## BAOBAB AI")
 
-# Display Message History
+# Message List Display
 for i, msg in enumerate(st.session_state.messages):
     st.markdown(f'<div id="msg-{i}"></div>', unsafe_allow_html=True)
     with st.chat_message(msg["role"]):
@@ -334,8 +357,8 @@ for i, msg in enumerate(st.session_state.messages):
         if "audio" in msg and msg["audio"] is not None:
             st.audio(msg["audio"], format="audio/mp3")
 
-# --- Integrated Gemini Input Dock ---
-dock_col1, dock_col2, dock_col3, dock_col4 = st.columns([0.6, 5.5, 2.2, 0.7])
+# --- Balanced Input Dock Layout ---
+dock_col1, dock_col2, dock_col3, dock_col4 = st.columns([0.5, 5.0, 3.5, 0.6])
 
 with dock_col1:
     st.markdown('<div class="gemini-dock-marker"></div>', unsafe_allow_html=True)
@@ -394,7 +417,7 @@ with dock_col1:
                             st.error(f"Image generation error: {str(e)}")
 
 with dock_col2:
-    user_prompt = st.text_input("Ask Gemini", value=st.session_state.pending_input, placeholder="Ask Gemini...", label_visibility="collapsed", key="dock_prompt_input")
+    user_prompt = st.text_input("Ask Baobab", value=st.session_state.pending_input, placeholder="Ask Baobab...", label_visibility="collapsed", key="dock_prompt_input")
 
 with dock_col3:
     st.audio_input("Record audio note", label_visibility="collapsed", key="dock_mic_input", on_change=transcribe_audio_callback)
@@ -402,7 +425,7 @@ with dock_col3:
 with dock_col4:
     send_clicked = st.button("➔", type="primary", key="dock_send_btn")
 
-# --- Query Processing Execution ---
+# --- Query Execution ---
 if send_clicked or (user_prompt and st.session_state.pending_input != user_prompt):
     if user_prompt.strip():
         user_input = user_prompt.strip()
@@ -528,7 +551,7 @@ RESPONSE ({target_language}):"""
                         ai_output = f"Error: {str(e)}"
                         message_placeholder.markdown(ai_output)
 
-            # TTS Synthesis
+            # TTS Audio Generation
             audio_bytes = None
             try:
                 tts = gTTS(text=ai_output, lang=TTS_LANG_MAP.get(target_language, 'en'))
