@@ -22,72 +22,7 @@ from guardrails import validate_user_input
 # Page Config
 st.set_page_config(page_title="BAOBAB AI", page_icon="🌳", layout="wide")
 
-# Custom CSS for Gemini-style Input Bar & Clean Sidebar
-st.markdown("""
-<style>
-    /* Hide Streamlit default branding padding */
-    .block-container {
-        padding-top: 2rem;
-        padding-bottom: 7rem;
-    }
-    
-    /* Clean Sidebar Styling */
-    section[data-testid="stSidebar"] {
-        background-color: #f8f9fa;
-        border-right: 1px solid #e9ecef;
-    }
-    
-    /* Unified Chat Pill Input Dock */
-    div[data-testid="stHorizontalBlock"]:has(div.gemini-dock-marker) {
-        position: fixed;
-        bottom: 20px;
-        left: 20%;
-        right: 5%;
-        background-color: #f0f4f9;
-        border-radius: 28px;
-        padding: 8px 16px;
-        box-shadow: 0 2px 6px rgba(0,0,0,0.08);
-        z-index: 9999;
-        align-items: center;
-    }
-
-    /* Style Popover (+ button) */
-    div[data-testid="stPopover"] > button {
-        border: none !important;
-        background: transparent !important;
-        font-size: 20px !important;
-        border-radius: 50% !important;
-        width: 40px !important;
-        height: 40px !important;
-        color: #444746 !important;
-    }
-    
-    div[data-testid="stPopover"] > button:hover {
-        background-color: #e1e5ea !important;
-    }
-
-    /* Seamless text input field inside dock */
-    div[data-testid="stTextInput"] > div > div > input {
-        border: none !important;
-        background: transparent !important;
-        box-shadow: none !important;
-        font-size: 16px !important;
-    }
-    
-    div[data-testid="stTextInput"] > div > div {
-        border: none !important;
-        background: transparent !important;
-    }
-
-    /* Microphone recorder inside dock */
-    div[data-testid="stAudioInput"] {
-        background: transparent !important;
-        border: none !important;
-    }
-</style>
-""", unsafe_allow_html=True)
-
-# Target Models
+# Target Gemini & Imagen Model Identifiers
 GEMINI_MODEL = "gemini-3.6-flash"
 IMAGEN_MODEL = "imagen-3.0-generate-002"
 
@@ -101,6 +36,63 @@ TTS_LANG_MAP = {
     'English': 'en',
     'Spanish': 'es'
 }
+
+# --- CSS Styling for Clean Gemini Dock & Sidebar ---
+st.markdown("""
+<style>
+    .block-container {
+        padding-top: 2rem;
+        padding-bottom: 7rem;
+    }
+    
+    section[data-testid="stSidebar"] {
+        background-color: #f8f9fa;
+        border-right: 1px solid #e9ecef;
+    }
+
+    /* Fixed Bottom Dock Container */
+    div[data-testid="stHorizontalBlock"]:has(div.gemini-dock-marker) {
+        position: fixed;
+        bottom: 25px;
+        left: 20%;
+        right: 5%;
+        background-color: #f0f4f9;
+        border-radius: 28px;
+        padding: 6px 16px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        z-index: 9999;
+        align-items: center;
+    }
+
+    /* Attachment Popover (+ Button) Styling */
+    div[data-testid="stPopover"] > button {
+        border: none !important;
+        background: transparent !important;
+        font-size: 22px !important;
+        border-radius: 50% !important;
+        width: 42px !important;
+        height: 42px !important;
+        color: #444746 !important;
+    }
+    
+    div[data-testid="stPopover"] > button:hover {
+        background-color: #e1e5ea !important;
+    }
+
+    /* Seamless Prompt Input */
+    div[data-testid="stTextInput"] > div > div > input {
+        border: none !important;
+        background: transparent !important;
+        box-shadow: none !important;
+        font-size: 16px !important;
+    }
+    
+    div[data-testid="stTextInput"] > div > div {
+        border: none !important;
+        background: transparent !important;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # --- Tool Definitions ---
 def get_current_weather(location: str) -> str:
@@ -205,7 +197,7 @@ api_key = st.secrets.get("GEMINI_API_KEY", os.environ.get("GEMINI_API_KEY"))
 client = genai.Client(api_key=api_key)
 
 def transcribe_audio_callback():
-    audio_data = st.session_state.get("live_mic_recorder")
+    audio_data = st.session_state.get("dock_mic_input")
     if audio_data is not None:
         try:
             audio_bytes = audio_data.read()
@@ -284,7 +276,7 @@ for doc in KNOWLEDGE_DOCUMENTS:
 
 all_active_documents = tagged_base_docs + st.session_state.custom_documents
 
-# --- Left Navigation Drawer (Gemini Style) ---
+# --- Left Sidebar Navigation & Controls ---
 with st.sidebar:
     st.markdown("### 🌳 BAOBAB AI")
     
@@ -292,6 +284,24 @@ with st.sidebar:
         st.session_state.messages = []
         st.session_state.analytics = {"bilstm_latencies": [], "faiss_latencies": [], "total_requests": 0, "blocked_requests": 0}
         st.rerun()
+
+    st.markdown("---")
+    st.subheader("🌐 Output Language")
+    target_language = st.selectbox(
+        "Select Response Language", 
+        sorted(label_encoder.classes_), 
+        index=sorted(label_encoder.classes_).index("Portuguese") if "Portuguese" in label_encoder.classes_ else 0,
+        label_visibility="collapsed"
+    )
+
+    st.markdown("---")
+    st.subheader("📂 Workspaces")
+    st.session_state.active_workspace = st.selectbox(
+        "Workspace Choice",
+        st.session_state.workspaces,
+        index=st.session_state.workspaces.index(st.session_state.active_workspace) if st.session_state.active_workspace in st.session_state.workspaces else 0,
+        label_visibility="collapsed"
+    )
 
     st.markdown("---")
     st.caption("Recents")
@@ -303,30 +313,16 @@ with st.sidebar:
     else:
         st.caption("*No recent conversations*")
 
-    st.markdown("---")
-    st.subheader("📂 Workspaces")
-    st.session_state.active_workspace = st.selectbox(
-        "Workspace",
-        st.session_state.workspaces,
-        index=st.session_state.workspaces.index(st.session_state.active_workspace) if st.session_state.active_workspace in st.session_state.workspaces else 0,
-        label_visibility="collapsed"
-    )
-
-    with st.expander("⚙️ Settings & Capabilities"):
-        target_language = st.selectbox(
-            "Language Output", 
-            sorted(label_encoder.classes_), 
-            index=sorted(label_encoder.classes_).index("Portuguese") if "Portuguese" in label_encoder.classes_ else 0
-        )
+    with st.expander("⚙️ Advanced Settings"):
         enable_web_search = st.toggle("Live Web Search", value=False)
         enable_code_interpreter = st.toggle("Python Code Sandbox", value=True)
         enable_function_calling = st.toggle("API Tool Calling", value=True)
         custom_persona = st.text_area("Persona Instructions", value="You are BAOBAB AI, an expert, helpful assistant.")
 
 # --- Main Interface ---
-st.markdown(f"## BAOBAB AI")
+st.markdown("## BAOBAB AI")
 
-# Message List
+# Display Message History
 for i, msg in enumerate(st.session_state.messages):
     st.markdown(f'<div id="msg-{i}"></div>', unsafe_allow_html=True)
     with st.chat_message(msg["role"]):
@@ -338,8 +334,8 @@ for i, msg in enumerate(st.session_state.messages):
         if "audio" in msg and msg["audio"] is not None:
             st.audio(msg["audio"], format="audio/mp3")
 
-# --- Integrated Gemini-Style Dock Bar ---
-dock_col1, dock_col2, dock_col3, dock_col4 = st.columns([0.6, 7, 1, 0.8])
+# --- Integrated Gemini Input Dock ---
+dock_col1, dock_col2, dock_col3, dock_col4 = st.columns([0.6, 5.5, 2.2, 0.7])
 
 with dock_col1:
     st.markdown('<div class="gemini-dock-marker"></div>', unsafe_allow_html=True)
@@ -401,12 +397,12 @@ with dock_col2:
     user_prompt = st.text_input("Ask Gemini", value=st.session_state.pending_input, placeholder="Ask Gemini...", label_visibility="collapsed", key="dock_prompt_input")
 
 with dock_col3:
-    st.audio_input("Record", label_visibility="collapsed", key="live_mic_recorder", on_change=transcribe_audio_callback)
+    st.audio_input("Record audio note", label_visibility="collapsed", key="dock_mic_input", on_change=transcribe_audio_callback)
 
 with dock_col4:
     send_clicked = st.button("➔", type="primary", key="dock_send_btn")
 
-# --- Process User Query ---
+# --- Query Processing Execution ---
 if send_clicked or (user_prompt and st.session_state.pending_input != user_prompt):
     if user_prompt.strip():
         user_input = user_prompt.strip()
@@ -478,7 +474,7 @@ RESPONSE ({target_language}):"""
 
                 config = types.GenerateContentConfig(tools=tools_list) if tools_list else None
 
-            # Generate Response
+            # Generate Content
             with st.chat_message("assistant"):
                 message_placeholder = st.empty()
                 tool_used_label = "None"
@@ -532,7 +528,7 @@ RESPONSE ({target_language}):"""
                         ai_output = f"Error: {str(e)}"
                         message_placeholder.markdown(ai_output)
 
-            # TTS Audio Output
+            # TTS Synthesis
             audio_bytes = None
             try:
                 tts = gTTS(text=ai_output, lang=TTS_LANG_MAP.get(target_language, 'en'))
