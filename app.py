@@ -22,8 +22,9 @@ from guardrails import validate_user_input
 # Page Config
 st.set_page_config(page_title="BAOBAB AI", page_icon="🌳", layout="wide")
 
-# Target Gemini Model Identifier
+# Target Gemini & Imagen Model Identifiers
 GEMINI_MODEL = "gemini-3.6-flash"
+IMAGEN_MODEL = "imagen-3.0-generate-002"
 
 # Ensure persistent storage directory exists
 SAVES_DIR = "saved_chats"
@@ -41,7 +42,6 @@ TTS_LANG_MAP = {
 # --- Tier 4: Executable External Tool Definitions ---
 def get_current_weather(location: str) -> str:
     """Fetches real-time structured weather reports for a city or region."""
-    # Simulated weather tool response
     loc_clean = location.strip().title()
     weather_db = {
         "Luanda": {"temp": "29°C", "condition": "Sunny", "humidity": "74%"},
@@ -72,6 +72,21 @@ def calculate_loan_repayment(principal: float, annual_rate: float, duration_year
         "total_interest": round(total_interest, 2),
         "total_payment": round(total_payment, 2)
     })
+
+def generate_imagen_art(prompt: str, aspect_ratio: str = "1:1") -> Image.Image:
+    """Generates a PIL image from a text prompt using Google Imagen 3."""
+    client_gen = genai.Client(api_key=st.secrets.get("GEMINI_API_KEY", os.environ.get("GEMINI_API_KEY")))
+    result = client_gen.models.generate_images(
+        model=IMAGEN_MODEL,
+        prompt=prompt,
+        config=types.GenerateImagesConfig(
+            number_of_images=1,
+            aspect_ratio=aspect_ratio,
+            output_mime_type="image/jpeg"
+        )
+    )
+    generated_img_bytes = result.generated_images[0].image.image_bytes
+    return Image.open(io.BytesIO(generated_img_bytes))
 
 # Map functions to their callable implementations
 AVAILABLE_FUNCTIONS = {
@@ -216,12 +231,10 @@ def build_faiss_index_for_docs(docs, tokenizer, embedding_dim=128):
     return index, docs
 
 def run_local_python_sandbox(code_str: str) -> str:
-    """Executes python code locally in a captured standard output stream."""
     import sys
     from io import StringIO
     old_stdout = sys.stdout
     redirected_output = sys.stdout = StringIO()
-    
     try:
         exec_globals = {"np": np, "pd": pd}
         exec(code_str, exec_globals)
@@ -256,14 +269,12 @@ with st.sidebar:
     st.markdown("---")
     st.header("📂 Knowledge Workspaces (Tier 3)")
     
-    # Active Workspace Selector
     st.session_state.active_workspace = st.selectbox(
         "Active Workspace",
         st.session_state.workspaces,
         index=st.session_state.workspaces.index(st.session_state.active_workspace) if st.session_state.active_workspace in st.session_state.workspaces else 0
     )
 
-    # Add New Custom Workspace
     new_ws = st.text_input("Create Workspace", placeholder="e.g. Finance")
     if st.button("➕ Create Workspace") and new_ws.strip():
         ws_clean = new_ws.strip().title()
@@ -280,7 +291,7 @@ with st.sidebar:
     st.header("🌐 Active Capabilities")
     enable_web_search = st.toggle("Enable Live Web Search", value=False)
     enable_code_interpreter = st.toggle("Enable Python Code Sandbox", value=True)
-    enable_function_calling = st.toggle("Enable API Tool Calling (Tier 4)", value=True, help="Allows AI to invoke external functions (Weather, Loan Calculator).")
+    enable_function_calling = st.toggle("Enable API Tool Calling (Tier 4)", value=True)
     
     custom_persona = st.text_area(
         "Custom Instructions / Persona", 
@@ -306,7 +317,7 @@ with st.sidebar:
     if st.button("💾 Save Session"):
         if st.session_state.messages:
             save_payload = {
-                "messages": [{k: v for k, v in msg.items() if k != "audio"} for msg in st.session_state.messages],
+                "messages": [{k: v for k, v in msg.items() if k not in ["audio", "generated_image"]} for msg in st.session_state.messages],
                 "analytics": st.session_state.analytics,
                 "workspace": st.session_state.active_workspace
             }
@@ -339,16 +350,6 @@ with st.sidebar:
     col1.metric("Total Turns", st.session_state.analytics["total_requests"])
     col2.metric("Blocked", st.session_state.analytics["blocked_requests"])
 
-# --- Local Interactive Sandbox Runner in Sidebar ---
-with st.sidebar:
-    st.markdown("---")
-    st.header("💻 Quick Local Python Runner")
-    with st.expander("Run Custom Python Snippet"):
-        user_code = st.text_area("Python Code", value="import numpy as np\nprint(np.mean([10, 20, 30, 40]))")
-        if st.button("Execute Snippet"):
-            out = run_local_python_sandbox(user_code)
-            st.code(out, language="text")
-
 # --- Main Chat UI ---
 search_active = bool(chat_search_query.strip())
 matches_found = 0
@@ -364,6 +365,8 @@ for i, msg in enumerate(st.session_state.messages):
             if is_match:
                 st.markdown(f"🔍 *Match found for '{chat_search_query}':*")
             st.markdown(msg["content"])
+            if "generated_image" in msg and msg["generated_image"] is not None:
+                st.image(msg["generated_image"], caption="Generated by Imagen 3", use_container_width=True)
             if "metadata" in msg:
                 st.caption(msg["metadata"])
             if "audio" in msg and msg["audio"] is not None:
@@ -374,12 +377,13 @@ if search_active:
 
 st.markdown("---")
 
-# --- Attachment Popover, Text Field, Live Audio Recorder & Send ---
+# --- Attachment Popover (Documents, Camera & Imagen Studio) ---
 input_col1, input_col2, input_col3 = st.columns([1, 6, 3])
 
 with input_col1:
-    with st.popover("➕", help="Add attachments"):
-        tab_file, tab_photo = st.tabs(["📄 Upload", "📷 Camera"])
+    with st.popover("➕", help="Add attachments or generate images"):
+        tab_file, tab_photo, tab_imagen = st.tabs(["📄 Upload", "📷 Camera", "🎨 Imagen Studio"])
+        
         with tab_file:
             uploaded_file = st.file_uploader("Upload File", type=["txt", "pdf", "docx", "pptx", "jpg", "jpeg", "png"], key="attachment_file")
             upload_workspace = st.selectbox("Assign Workspace", st.session_state.workspaces, index=st.session_state.workspaces.index(st.session_state.active_workspace), key="file_ws")
@@ -395,6 +399,7 @@ with input_col1:
                         "text": ext_text
                     })
                     st.success(f"Attached **{uploaded_file.name}** to **{upload_workspace}**!")
+
         with tab_photo:
             camera_image = st.camera_input("Take photo", key="attachment_cam")
             photo_workspace = st.selectbox("Assign Workspace", st.session_state.workspaces, index=st.session_state.workspaces.index(st.session_state.active_workspace), key="cam_ws")
@@ -411,6 +416,27 @@ with input_col1:
                         "text": ext_text
                     })
                     st.success(f"Photo attached to **{photo_workspace}**!")
+
+        with tab_imagen:
+            st.subheader("🎨 Generate Image with Imagen 3")
+            img_prompt = st.text_area("Image Description", placeholder="e.g. A futuristic Baobab tree bathed in bioluminescent light", key="imagen_studio_prompt")
+            aspect_choice = st.selectbox("Aspect Ratio", ["1:1", "16:9", "9:16", "4:3", "3:4"], key="imagen_studio_aspect")
+            
+            if st.button("✨ Generate Image", key="btn_generate_imagen"):
+                if img_prompt.strip():
+                    with st.spinner("Generating image via Imagen 3..."):
+                        try:
+                            pil_img = generate_imagen_art(img_prompt.strip(), aspect_ratio=aspect_choice)
+                            st.session_state.messages.append({"role": "user", "content": f"🎨 Generate Image: {img_prompt}"})
+                            st.session_state.messages.append({
+                                "role": "assistant",
+                                "content": f"Here is the generated image for: *\"{img_prompt}\"*",
+                                "generated_image": pil_img,
+                                "metadata": "🎨 Model: `Imagen 3`"
+                            })
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Image generation error: {str(e)}")
 
 with input_col2:
     user_input = st.text_input("Prompt", value=st.session_state.pending_input, placeholder=f"Ask BAOBAB AI [{st.session_state.active_workspace}]...", label_visibility="collapsed", key="main_prompt_field")
@@ -435,7 +461,6 @@ if send_pressed:
             st.session_state.messages.append({"role": "user", "content": user_input})
             
             with st.spinner("Processing..."):
-                # BiLSTM Language Detection
                 t0_bilstm = time.perf_counter()
                 seq = tokenizer.texts_to_sequences([user_input])
                 padded = pad_sequences(seq, maxlen=50)
@@ -444,7 +469,6 @@ if send_pressed:
                 confidence = float(np.max(preds)) * 100
                 st.session_state.analytics["bilstm_latencies"].append(round((time.perf_counter() - t0_bilstm) * 1000, 2))
 
-                # Partitioned FAISS Retrieval (Strictly within active workspace)
                 t0_faiss = time.perf_counter()
                 embedding_dim = 128
                 workspace_docs = [d for d in all_active_documents if d.get("workspace", "General") == st.session_state.active_workspace]
@@ -484,7 +508,6 @@ HISTORY:
 QUERY: {user_input}
 RESPONSE ({target_language}):"""
 
-                # Configure tools (Search Grounding, Python Code Execution, & Function Calling)
                 tools_list = []
                 if enable_web_search:
                     tools_list.append({"google_search": {}})
@@ -495,51 +518,60 @@ RESPONSE ({target_language}):"""
 
                 config = types.GenerateContentConfig(tools=tools_list) if tools_list else None
 
-            # Execution with Dynamic Function Dispatching
+            # Execution
             with st.chat_message("assistant"):
                 message_placeholder = st.empty()
                 tool_used_label = "None"
+                generated_image_obj = None
                 
-                try:
-                    response = client.models.generate_content(
-                        model=GEMINI_MODEL,
-                        contents=prompt_sent,
-                        config=config
-                    )
-                    
-                    # Handle Tool Function Calls from Gemini
-                    if response.function_calls:
-                        call = response.function_calls[0]
-                        fn_name = call.name
-                        fn_args = call.args
-                        tool_used_label = f"`{fn_name}()`"
+                # Check for explicit image generation triggers in user input
+                if any(k in user_input.lower() for k in ["generate image", "draw", "create picture", "generate an image"]):
+                    try:
+                        generated_image_obj = generate_imagen_art(user_input)
+                        tool_used_label = "`Imagen 3`"
+                        ai_output = f"Generated image based on prompt: *\"{user_input}\"*"
+                        st.image(generated_image_obj, caption="Imagen 3", use_container_width=True)
+                    except Exception as e:
+                        ai_output = f"Imagen Generation Error: {str(e)}"
+                        message_placeholder.markdown(ai_output)
+                else:
+                    try:
+                        response = client.models.generate_content(
+                            model=GEMINI_MODEL,
+                            contents=prompt_sent,
+                            config=config
+                        )
                         
-                        if fn_name in AVAILABLE_FUNCTIONS:
-                            tool_result = AVAILABLE_FUNCTIONS[fn_name](**fn_args)
+                        if response.function_calls:
+                            call = response.function_calls[0]
+                            fn_name = call.name
+                            fn_args = call.args
+                            tool_used_label = f"`{fn_name}()`"
                             
-                            # Feed Tool Execution Result back to Gemini for final response synthesis
-                            followup_response = client.models.generate_content(
-                                model=GEMINI_MODEL,
-                                contents=[
-                                    prompt_sent,
-                                    response.candidates[0].content,
-                                    types.Part.from_function_response(
-                                        name=fn_name,
-                                        response={"result": tool_result}
-                                    )
-                                ]
-                            )
-                            ai_output = followup_response.text
+                            if fn_name in AVAILABLE_FUNCTIONS:
+                                tool_result = AVAILABLE_FUNCTIONS[fn_name](**fn_args)
+                                followup_response = client.models.generate_content(
+                                    model=GEMINI_MODEL,
+                                    contents=[
+                                        prompt_sent,
+                                        response.candidates[0].content,
+                                        types.Part.from_function_response(
+                                            name=fn_name,
+                                            response={"result": tool_result}
+                                        )
+                                    ]
+                                )
+                                ai_output = followup_response.text
+                            else:
+                                ai_output = response.text
                         else:
                             ai_output = response.text
-                    else:
-                        ai_output = response.text
 
-                    message_placeholder.markdown(ai_output)
+                        message_placeholder.markdown(ai_output)
 
-                except Exception as e:
-                    ai_output = f"Error: {str(e)}"
-                    message_placeholder.markdown(ai_output)
+                    except Exception as e:
+                        ai_output = f"Error: {str(e)}"
+                        message_placeholder.markdown(ai_output)
 
             # TTS Audio Generation
             audio_bytes = None
@@ -555,6 +587,7 @@ RESPONSE ({target_language}):"""
             st.session_state.messages.append({
                 "role": "assistant", 
                 "content": ai_output, 
+                "generated_image": generated_image_obj,
                 "metadata": metadata,
                 "audio": audio_bytes
             })
