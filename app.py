@@ -10,8 +10,7 @@ import tensorflow as tf
 from tensorflow.keras.preprocessing.sequence import pad_sequences
 from google import genai
 from google.genai import types
-from google.genai.errors import APIError
-from gtts import gTTS
+from gTTS import gTTS
 import faiss
 from PIL import Image
 import pypdf
@@ -23,7 +22,7 @@ from guardrails import validate_user_input
 # Page Config
 st.set_page_config(page_title="BAOBAB AI", page_icon="🌳", layout="wide")
 
-# Primary & Fallback Models
+# Target Model Identifiers
 GEMINI_MODEL = "gemini-2.5-flash"
 IMAGEN_MODEL = "imagen-3.0-generate-002"
 
@@ -38,12 +37,12 @@ TTS_LANG_MAP = {
     'Spanish': 'es'
 }
 
-# --- Responsive CSS Dock & Layout Fixes ---
+# --- CSS Styling for Responsive Dock Bar & Clean Sidebar ---
 st.markdown("""
 <style>
     .block-container {
         padding-top: 2rem;
-        padding-bottom: 9rem;
+        padding-bottom: 8rem;
     }
     
     section[data-testid="stSidebar"] {
@@ -51,22 +50,23 @@ st.markdown("""
         border-right: 1px solid #e9ecef;
     }
 
-    /* Clean Bottom Dock Bar */
-    div[data-testid="stHorizontalBlock"]:has(div.baobab-dock-marker) {
+    /* Fixed Bottom Dock Container - Tightened to fit all screens */
+    div[data-testid="stHorizontalBlock"]:has(div.gemini-dock-marker) {
         position: fixed;
         bottom: 20px;
-        left: 20%;
+        left: 21%;
         right: 4%;
         max-width: 76%;
         background-color: #f0f4f9;
         border-radius: 28px;
-        padding: 6px 14px;
-        box-shadow: 0 4px 14px rgba(0,0,0,0.15);
+        padding: 4px 12px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.12);
         z-index: 9999;
         align-items: center;
+        overflow: visible !important;
     }
 
-    /* Attachment + Button */
+    /* Attachment Popover (+ Button) Styling */
     div[data-testid="stPopover"] > button {
         border: none !important;
         background: transparent !important;
@@ -75,18 +75,20 @@ st.markdown("""
         width: 38px !important;
         height: 38px !important;
         color: #444746 !important;
+        margin: 0 !important;
     }
     
     div[data-testid="stPopover"] > button:hover {
         background-color: #e1e5ea !important;
     }
 
-    /* Seamless Prompt Field */
+    /* Seamless Prompt Input Field */
     div[data-testid="stTextInput"] > div > div > input {
         border: none !important;
         background: transparent !important;
         box-shadow: none !important;
         font-size: 15px !important;
+        padding-left: 5px !important;
     }
     
     div[data-testid="stTextInput"] > div > div {
@@ -94,17 +96,28 @@ st.markdown("""
         background: transparent !important;
     }
 
-    /* Send Button Fixed Style */
+    /* Compact Audio Input Component */
+    div[data-testid="stAudioInput"] {
+        background: transparent !important;
+        border: none !important;
+        padding: 0 !important;
+        margin: 0 !important;
+    }
+    
+    /* Primary Send Button Adjustment */
     div[data-testid="stButton"] > button[kind="primary"] {
         border-radius: 50% !important;
-        width: 40px !important;
-        height: 40px !important;
+        width: 38px !important;
+        height: 38px !important;
         padding: 0 !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# --- Functions ---
+# --- Tool Definitions ---
 def get_current_weather(location: str) -> str:
     loc_clean = location.strip().title()
     weather_db = {
@@ -179,12 +192,17 @@ loan_declaration = types.FunctionDeclaration(
     )
 )
 
-# State Initialization
+# Initialize Session State
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
 if "analytics" not in st.session_state:
-    st.session_state.analytics = {"bilstm_latencies": [], "faiss_latencies": [], "total_requests": 0, "blocked_requests": 0}
+    st.session_state.analytics = {
+        "bilstm_latencies": [],
+        "faiss_latencies": [],
+        "total_requests": 0,
+        "blocked_requests": 0
+    }
 
 if "custom_documents" not in st.session_state:
     st.session_state.custom_documents = []
@@ -198,8 +216,11 @@ if "active_workspace" not in st.session_state:
 if "pending_input" not in st.session_state:
     st.session_state.pending_input = ""
 
-if "last_processed_audio_hash" not in st.session_state:
-    st.session_state.last_processed_audio_hash = None
+if "last_processed" not in st.session_state:
+    st.session_state.last_processed = ""
+
+if "last_audio_id" not in st.session_state:
+    st.session_state.last_audio_id = None
 
 api_key = st.secrets.get("GEMINI_API_KEY", os.environ.get("GEMINI_API_KEY"))
 client = genai.Client(api_key=api_key)
@@ -268,13 +289,15 @@ for doc in KNOWLEDGE_DOCUMENTS:
 
 all_active_documents = tagged_base_docs + st.session_state.custom_documents
 
-# --- Sidebar ---
+# --- Left Sidebar Navigation ---
 with st.sidebar:
     st.markdown("### 🌳 BAOBAB AI")
     
     if st.button("➕  New chat", use_container_width=True):
         st.session_state.messages = []
         st.session_state.analytics = {"bilstm_latencies": [], "faiss_latencies": [], "total_requests": 0, "blocked_requests": 0}
+        st.session_state.last_processed = ""
+        st.session_state.pending_input = ""
         st.rerun()
 
     st.markdown("---")
@@ -307,13 +330,14 @@ with st.sidebar:
 
     with st.expander("⚙️ Advanced Settings"):
         enable_web_search = st.toggle("Live Web Search", value=False)
-        enable_code_interpreter = st.toggle("Python Code Sandbox", value=False)
+        enable_code_interpreter = st.toggle("Python Code Sandbox", value=True)
         enable_function_calling = st.toggle("API Tool Calling", value=True)
         custom_persona = st.text_area("Persona Instructions", value="You are BAOBAB AI, an expert, helpful assistant.")
 
-# --- Main App Display ---
+# --- Main Area ---
 st.markdown("## BAOBAB AI")
 
+# Message List Display
 for i, msg in enumerate(st.session_state.messages):
     st.markdown(f'<div id="msg-{i}"></div>', unsafe_allow_html=True)
     with st.chat_message(msg["role"]):
@@ -325,11 +349,11 @@ for i, msg in enumerate(st.session_state.messages):
         if "audio" in msg and msg["audio"] is not None:
             st.audio(msg["audio"], format="audio/mp3")
 
-# --- Fixed Bottom Dock Row ---
-dock_col1, dock_col2, dock_col3, dock_col4 = st.columns([0.5, 3.0, 5.0, 0.6])
+# --- Balanced Input Dock Layout ---
+dock_col1, dock_col2, dock_col3, dock_col4 = st.columns([0.5, 0.6, 7.5, 0.6])
 
 with dock_col1:
-    st.markdown('<div class="baobab-dock-marker"></div>', unsafe_allow_html=True)
+    st.markdown('<div class="gemini-dock-marker"></div>', unsafe_allow_html=True)
     with st.popover("➕", help="Add attachments or generate images"):
         tab_file, tab_photo, tab_imagen = st.tabs(["📄 Upload", "📷 Camera", "🎨 Imagen Studio"])
         
@@ -385,26 +409,22 @@ with dock_col1:
                             st.error(f"Image generation error: {str(e)}")
 
 with dock_col2:
-    recorded_audio = st.audio_input("Record audio note", label_visibility="collapsed", key="dock_mic_input")
-    if recorded_audio is not None:
-        audio_bytes = recorded_audio.read()
-        audio_hash = hash(audio_bytes)
-        if audio_hash != st.session_state.last_processed_audio_hash:
-            st.session_state.last_processed_audio_hash = audio_hash
-            try:
-                mime_type = getattr(recorded_audio, "type", "audio/wav") or "audio/wav"
-                audio_part = types.Part.from_bytes(data=audio_bytes, mime_type=mime_type)
-                stt_res = client.models.generate_content(
-                    model=GEMINI_MODEL,
-                    contents=[audio_part, "Transcribe the spoken words accurately without extra comments."]
-                )
-                if stt_res.text:
-                    st.session_state.pending_input = stt_res.text.strip()
-                    st.rerun()
-            except APIError as e:
-                st.warning("API quota limit reached for transcription. Please type your message below.")
-            except Exception as e:
-                st.error(f"Transcription Error: {str(e)}")
+    audio_data = st.audio_input("Record audio note", label_visibility="collapsed", key="dock_mic_input")
+    if audio_data is not None and audio_data != st.session_state.last_audio_id:
+        st.session_state.last_audio_id = audio_data
+        try:
+            audio_bytes = audio_data.read()
+            mime_type = getattr(audio_data, "type", "audio/wav") or "audio/wav"
+            audio_part = types.Part.from_bytes(data=audio_bytes, mime_type=mime_type)
+            stt_response = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=[audio_part, "Transcribe the spoken audio into text accurately without commentary."]
+            )
+            if stt_response.text:
+                st.session_state.pending_input = stt_response.text.strip()
+                st.rerun()
+        except Exception as e:
+            st.error(f"Audio transcription error: {str(e)}")
 
 with dock_col3:
     user_prompt = st.text_input("Ask Baobab", value=st.session_state.pending_input, placeholder="Ask Baobab...", label_visibility="collapsed", key="dock_prompt_input")
@@ -412,10 +432,11 @@ with dock_col3:
 with dock_col4:
     send_clicked = st.button("➔", type="primary", key="dock_send_btn")
 
-# --- Query Execution ---
-if send_clicked or (user_prompt and st.session_state.pending_input != user_prompt):
+# --- Loop-Safe Execution Engine ---
+if send_clicked or (user_prompt and user_prompt != st.session_state.last_processed):
     if user_prompt.strip():
         user_input = user_prompt.strip()
+        st.session_state.last_processed = user_input
         st.session_state.pending_input = ""
         st.session_state.analytics["total_requests"] += 1
         
@@ -440,7 +461,7 @@ if send_clicked or (user_prompt and st.session_state.pending_input != user_promp
                 workspace_docs = [d for d in all_active_documents if d.get("workspace", "General") == st.session_state.active_workspace]
                 
                 active_faiss_index, active_docs = build_faiss_index_for_docs(workspace_docs, tokenizer, embedding_dim)
-                rag_context = f"No relevant document found in workspace '{st.session_state.active_workspace}'."
+                rag_context, doc_title = f"No relevant document found in workspace '{st.session_state.active_workspace}'.", "None"
                 
                 if active_faiss_index is not None:
                     q_vec = np.zeros(embedding_dim, dtype='float32')
@@ -454,6 +475,7 @@ if send_clicked or (user_prompt and st.session_state.pending_input != user_promp
                         if float(distances[0][0]) >= 0.35:
                             retrieved_doc = active_docs[indices[0][0]]
                             rag_context = retrieved_doc["text"]
+                            doc_title = f"[{retrieved_doc['category']}] {retrieved_doc['title']}"
                 st.session_state.analytics["faiss_latencies"].append(round((time.perf_counter() - t0_faiss) * 1000, 2))
 
                 history_context = "".join([f"{m['role'].upper()}: {m['content']}\n" for m in st.session_state.messages[:-1]])
@@ -483,13 +505,13 @@ RESPONSE ({target_language}):"""
 
                 config = types.GenerateContentConfig(tools=tools_list) if tools_list else None
 
-            # Generate Assistant Answer
+            # Generate Content safely with Quota Exhaustion handling
             with st.chat_message("assistant"):
                 message_placeholder = st.empty()
                 tool_used_label = "None"
                 generated_image_obj = None
                 
-                if any(k in user_input.lower() for k in ["generate image", "draw", "create picture"]):
+                if any(k in user_input.lower() for k in ["generate image", "draw", "create picture", "generate an image"]):
                     try:
                         generated_image_obj = generate_imagen_art(user_input)
                         tool_used_label = "`Imagen 3`"
@@ -533,14 +555,14 @@ RESPONSE ({target_language}):"""
 
                         message_placeholder.markdown(ai_output)
 
-                    except APIError as e:
-                        ai_output = "⚠️ **Quota Limit Reached**: Free tier limit exceeded for now. Please wait a minute before making another query."
-                        message_placeholder.markdown(ai_output)
                     except Exception as e:
-                        ai_output = f"Error: {str(e)}"
+                        if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
+                            ai_output = "⚠️ **API Quota Limit Reached**: Free tier limit reached. Please wait a minute and click Send again."
+                        else:
+                            ai_output = f"Error: {str(e)}"
                         message_placeholder.markdown(ai_output)
 
-            # Speech Synthesis
+            # TTS Audio Generation
             audio_bytes = None
             try:
                 tts = gTTS(text=ai_output, lang=TTS_LANG_MAP.get(target_language, 'en'))
