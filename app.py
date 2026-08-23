@@ -142,36 +142,9 @@ if "workspaces" not in st.session_state:
 if "active_workspace" not in st.session_state:
     st.session_state.active_workspace = "General"
 
-if "pending_input" not in st.session_state:
-    st.session_state.pending_input = ""
-
 # Gemini API Client setup
 api_key = st.secrets.get("GEMINI_API_KEY", os.environ.get("GEMINI_API_KEY"))
 client = genai.Client(api_key=api_key)
-
-def transcribe_audio_callback():
-    audio_data = st.session_state.get("live_mic_recorder")
-    if audio_data is not None:
-        try:
-            audio_bytes = audio_data.read()
-            mime_type = getattr(audio_data, "type", "audio/wav") or "audio/wav"
-            
-            audio_part = types.Part.from_bytes(
-                data=audio_bytes,
-                mime_type=mime_type
-            )
-            
-            stt_response = client.models.generate_content(
-                model=GEMINI_MODEL,
-                contents=[
-                    audio_part,
-                    "Transcribe the spoken audio into text accurately without adding explanations or extra output."
-                ]
-            )
-            if stt_response.text:
-                st.session_state.pending_input = stt_response.text.strip()
-        except Exception as e:
-            st.error(f"Audio transcription error: {str(e)}")
 
 def extract_text_from_file(uploaded_file, client_gemini=None):
     filename = uploaded_file.name.lower()
@@ -229,21 +202,6 @@ def build_faiss_index_for_docs(docs, tokenizer, embedding_dim=128):
     index = faiss.IndexFlatIP(embedding_dim)
     index.add(doc_matrix)
     return index, docs
-
-def run_local_python_sandbox(code_str: str) -> str:
-    import sys
-    from io import StringIO
-    old_stdout = sys.stdout
-    redirected_output = sys.stdout = StringIO()
-    try:
-        exec_globals = {"np": np, "pd": pd}
-        exec(code_str, exec_globals)
-        output = redirected_output.getvalue()
-        return output if output else "Code executed successfully with no output."
-    except Exception as e:
-        return f"Execution Error: {str(e)}"
-    finally:
-        sys.stdout = old_stdout
 
 # Tag base knowledge documents with workspace context
 tagged_base_docs = []
@@ -377,123 +335,117 @@ if search_active:
 
 st.markdown("---")
 
-# --- Attachment Popover (Documents, Camera & Imagen Studio) ---
-input_col1, input_col2, input_col3 = st.columns([1, 6, 3])
+# --- Attachment Studio Popover (Positioned directly above the chat box) ---
+with st.popover("📎 Tools & Attachments", help="Upload documents, scan with camera, or generate AI artwork"):
+    tab_file, tab_photo, tab_imagen = st.tabs(["📄 Upload", "📷 Camera", "🎨 Imagen Studio"])
+    
+    with tab_file:
+        uploaded_file = st.file_uploader("Upload File", type=["txt", "pdf", "docx", "pptx", "jpg", "jpeg", "png"], key="attachment_file")
+        upload_workspace = st.selectbox("Assign Workspace", st.session_state.workspaces, index=st.session_state.workspaces.index(st.session_state.active_workspace), key="file_ws")
+        upload_category = st.text_input("Category", value="Custom Knowledge", key="file_cat")
+        if st.button("📥 Attach File", key="btn_attach_file") and uploaded_file:
+            ext_text = extract_text_from_file(uploaded_file, client_gemini=client)
+            if ext_text:
+                st.session_state.custom_documents.append({
+                    "id": len(all_active_documents) + 1,
+                    "title": uploaded_file.name,
+                    "workspace": upload_workspace,
+                    "category": upload_category.strip() or "Custom Knowledge",
+                    "text": ext_text
+                })
+                st.success(f"Attached **{uploaded_file.name}** to **{upload_workspace}**!")
 
-with input_col1:
-    with st.popover("➕", help="Add attachments or generate images"):
-        tab_file, tab_photo, tab_imagen = st.tabs(["📄 Upload", "📷 Camera", "🎨 Imagen Studio"])
+    with tab_photo:
+        camera_image = st.camera_input("Take photo", key="attachment_cam")
+        photo_workspace = st.selectbox("Assign Workspace", st.session_state.workspaces, index=st.session_state.workspaces.index(st.session_state.active_workspace), key="cam_ws")
+        photo_category = st.text_input("Category", value="Custom Knowledge", key="cam_cat")
+        if st.button("📥 Attach Scan", key="btn_attach_cam") and camera_image:
+            img = Image.open(camera_image)
+            ext_text = client.models.generate_content(model=GEMINI_MODEL, contents=[img, "Extract text cleanly."]).text.strip()
+            if ext_text:
+                st.session_state.custom_documents.append({
+                    "id": len(all_active_documents) + 1,
+                    "title": f"Scan_{int(time.time())}.jpg",
+                    "workspace": photo_workspace,
+                    "category": photo_category.strip() or "Custom Knowledge",
+                    "text": ext_text
+                })
+                st.success(f"Photo attached to **{photo_workspace}**!")
+
+    with tab_imagen:
+        st.subheader("🎨 Generate Image with Imagen 3")
+        img_prompt = st.text_area("Image Description", placeholder="e.g. A futuristic Baobab tree bathed in bioluminescent light", key="imagen_studio_prompt")
+        aspect_choice = st.selectbox("Aspect Ratio", ["1:1", "16:9", "9:16", "4:3", "3:4"], key="imagen_studio_aspect")
         
-        with tab_file:
-            uploaded_file = st.file_uploader("Upload File", type=["txt", "pdf", "docx", "pptx", "jpg", "jpeg", "png"], key="attachment_file")
-            upload_workspace = st.selectbox("Assign Workspace", st.session_state.workspaces, index=st.session_state.workspaces.index(st.session_state.active_workspace), key="file_ws")
-            upload_category = st.text_input("Category", value="Custom Knowledge", key="file_cat")
-            if st.button("📥 Attach File", key="btn_attach_file") and uploaded_file:
-                ext_text = extract_text_from_file(uploaded_file, client_gemini=client)
-                if ext_text:
-                    st.session_state.custom_documents.append({
-                        "id": len(all_active_documents) + 1,
-                        "title": uploaded_file.name,
-                        "workspace": upload_workspace,
-                        "category": upload_category.strip() or "Custom Knowledge",
-                        "text": ext_text
-                    })
-                    st.success(f"Attached **{uploaded_file.name}** to **{upload_workspace}**!")
+        if st.button("✨ Generate Image", key="btn_generate_imagen"):
+            if img_prompt.strip():
+                with st.spinner("Generating image via Imagen 3..."):
+                    try:
+                        pil_img = generate_imagen_art(img_prompt.strip(), aspect_ratio=aspect_choice)
+                        st.session_state.messages.append({"role": "user", "content": f"🎨 Generate Image: {img_prompt}"})
+                        st.session_state.messages.append({
+                            "role": "assistant",
+                            "content": f"Here is the generated image for: *\"{img_prompt}\"*",
+                            "generated_image": pil_img,
+                            "metadata": "🎨 Model: `Imagen 3`"
+                        })
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Image generation error: {str(e)}")
 
-        with tab_photo:
-            camera_image = st.camera_input("Take photo", key="attachment_cam")
-            photo_workspace = st.selectbox("Assign Workspace", st.session_state.workspaces, index=st.session_state.workspaces.index(st.session_state.active_workspace), key="cam_ws")
-            photo_category = st.text_input("Category", value="Custom Knowledge", key="cam_cat")
-            if st.button("📥 Attach Scan", key="btn_attach_cam") and camera_image:
-                img = Image.open(camera_image)
-                ext_text = client.models.generate_content(model=GEMINI_MODEL, contents=[img, "Extract text cleanly."]).text.strip()
-                if ext_text:
-                    st.session_state.custom_documents.append({
-                        "id": len(all_active_documents) + 1,
-                        "title": f"Scan_{int(time.time())}.jpg",
-                        "workspace": photo_workspace,
-                        "category": photo_category.strip() or "Custom Knowledge",
-                        "text": ext_text
-                    })
-                    st.success(f"Photo attached to **{photo_workspace}**!")
+# --- Native Chat Input with Integrated Microphone Inside standard Input Field ---
+chat_input_response = st.chat_input(
+    placeholder=f"Ask BAOBAB AI [{st.session_state.active_workspace}] or tap 🎙️ inside to record...",
+    accept_file=False
+)
 
-        with tab_imagen:
-            st.subheader("🎨 Generate Image with Imagen 3")
-            img_prompt = st.text_area("Image Description", placeholder="e.g. A futuristic Baobab tree bathed in bioluminescent light", key="imagen_studio_prompt")
-            aspect_choice = st.selectbox("Aspect Ratio", ["1:1", "16:9", "9:16", "4:3", "3:4"], key="imagen_studio_aspect")
-            
-            if st.button("✨ Generate Image", key="btn_generate_imagen"):
-                if img_prompt.strip():
-                    with st.spinner("Generating image via Imagen 3..."):
-                        try:
-                            pil_img = generate_imagen_art(img_prompt.strip(), aspect_ratio=aspect_choice)
-                            st.session_state.messages.append({"role": "user", "content": f"🎨 Generate Image: {img_prompt}"})
-                            st.session_state.messages.append({
-                                "role": "assistant",
-                                "content": f"Here is the generated image for: *\"{img_prompt}\"*",
-                                "generated_image": pil_img,
-                                "metadata": "🎨 Model: `Imagen 3`"
-                            })
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Image generation error: {str(e)}")
-
-with input_col2:
-    user_input = st.text_input("Prompt", value=st.session_state.pending_input, placeholder=f"Ask BAOBAB AI [{st.session_state.active_workspace}]...", label_visibility="collapsed", key="main_prompt_field")
-
-with input_col3:
-    st.audio_input("Record voice", label_visibility="collapsed", key="live_mic_recorder", on_change=transcribe_audio_callback)
-    send_pressed = st.button("Send", type="primary", use_container_width=True)
-
-# Process Prompt
-if send_pressed:
-    if not user_input.strip():
-        st.warning("Please enter a message.")
+# Process Prompt or Spoken Voice
+if chat_input_response:
+    user_input = chat_input_response.strip()
+    
+    st.session_state.analytics["total_requests"] += 1
+    
+    is_safe, guardrail_msg = validate_user_input(user_input)
+    if not is_safe:
+        st.session_state.analytics["blocked_requests"] += 1
+        st.error(f"🚫 **Input Blocked**: {guardrail_msg}")
     else:
-        st.session_state.pending_input = ""
-        st.session_state.analytics["total_requests"] += 1
+        st.session_state.messages.append({"role": "user", "content": user_input})
         
-        is_safe, guardrail_msg = validate_user_input(user_input)
-        if not is_safe:
-            st.session_state.analytics["blocked_requests"] += 1
-            st.error(f"🚫 **Input Blocked**: {guardrail_msg}")
-        else:
-            st.session_state.messages.append({"role": "user", "content": user_input})
+        with st.spinner("Processing..."):
+            t0_bilstm = time.perf_counter()
+            seq = tokenizer.texts_to_sequences([user_input])
+            padded = pad_sequences(seq, maxlen=50)
+            preds = model.predict(padded)
+            detected_lang = label_encoder.inverse_transform([np.argmax(preds)])[0]
+            confidence = float(np.max(preds)) * 100
+            st.session_state.analytics["bilstm_latencies"].append(round((time.perf_counter() - t0_bilstm) * 1000, 2))
+
+            t0_faiss = time.perf_counter()
+            embedding_dim = 128
+            workspace_docs = [d for d in all_active_documents if d.get("workspace", "General") == st.session_state.active_workspace]
             
-            with st.spinner("Processing..."):
-                t0_bilstm = time.perf_counter()
-                seq = tokenizer.texts_to_sequences([user_input])
-                padded = pad_sequences(seq, maxlen=50)
-                preds = model.predict(padded)
-                detected_lang = label_encoder.inverse_transform([np.argmax(preds)])[0]
-                confidence = float(np.max(preds)) * 100
-                st.session_state.analytics["bilstm_latencies"].append(round((time.perf_counter() - t0_bilstm) * 1000, 2))
+            active_faiss_index, active_docs = build_faiss_index_for_docs(workspace_docs, tokenizer, embedding_dim)
+            rag_context, doc_title = f"No relevant document found in workspace '{st.session_state.active_workspace}'.", "None"
+            
+            if active_faiss_index is not None:
+                q_vec = np.zeros(embedding_dim, dtype='float32')
+                if seq[0]:
+                    for idx in seq[0][:embedding_dim]:
+                        q_vec[idx % embedding_dim] += 1.0
+                if np.sum(q_vec) > 0:
+                    q_matrix = np.array([q_vec]).astype('float32')
+                    faiss.normalize_L2(q_matrix)
+                    distances, indices = active_faiss_index.search(q_matrix, k=1)
+                    if float(distances[0][0]) >= 0.35:
+                        retrieved_doc = active_docs[indices[0][0]]
+                        rag_context = retrieved_doc["text"]
+                        doc_title = f"[{retrieved_doc['category']}] {retrieved_doc['title']}"
+            st.session_state.analytics["faiss_latencies"].append(round((time.perf_counter() - t0_faiss) * 1000, 2))
 
-                t0_faiss = time.perf_counter()
-                embedding_dim = 128
-                workspace_docs = [d for d in all_active_documents if d.get("workspace", "General") == st.session_state.active_workspace]
-                
-                active_faiss_index, active_docs = build_faiss_index_for_docs(workspace_docs, tokenizer, embedding_dim)
-                rag_context, doc_title = f"No relevant document found in workspace '{st.session_state.active_workspace}'.", "None"
-                
-                if active_faiss_index is not None:
-                    q_vec = np.zeros(embedding_dim, dtype='float32')
-                    if seq[0]:
-                        for idx in seq[0][:embedding_dim]:
-                            q_vec[idx % embedding_dim] += 1.0
-                    if np.sum(q_vec) > 0:
-                        q_matrix = np.array([q_vec]).astype('float32')
-                        faiss.normalize_L2(q_matrix)
-                        distances, indices = active_faiss_index.search(q_matrix, k=1)
-                        if float(distances[0][0]) >= 0.35:
-                            retrieved_doc = active_docs[indices[0][0]]
-                            rag_context = retrieved_doc["text"]
-                            doc_title = f"[{retrieved_doc['category']}] {retrieved_doc['title']}"
-                st.session_state.analytics["faiss_latencies"].append(round((time.perf_counter() - t0_faiss) * 1000, 2))
+            history_context = "".join([f"{m['role'].upper()}: {m['content']}\n" for m in st.session_state.messages[:-1]])
 
-                history_context = "".join([f"{m['role'].upper()}: {m['content']}\n" for m in st.session_state.messages[:-1]])
-
-                prompt_sent = f"""SYSTEM INSTRUCTION:
+            prompt_sent = f"""SYSTEM INSTRUCTION:
 {custom_persona}
 Detected Input Language: {detected_lang} (Confidence: {confidence:.1f}%).
 TARGET OUTPUT LANGUAGE: Compose your response strictly in {target_language}.
@@ -508,87 +460,87 @@ HISTORY:
 QUERY: {user_input}
 RESPONSE ({target_language}):"""
 
-                tools_list = []
-                if enable_web_search:
-                    tools_list.append({"google_search": {}})
-                if enable_code_interpreter:
-                    tools_list.append(types.Tool(code_execution=types.CodeExecution()))
-                if enable_function_calling:
-                    tools_list.append(types.Tool(function_declarations=[weather_declaration, loan_declaration]))
+            tools_list = []
+            if enable_web_search:
+                tools_list.append({"google_search": {}})
+            if enable_code_interpreter:
+                tools_list.append(types.Tool(code_execution=types.CodeExecution()))
+            if enable_function_calling:
+                tools_list.append(types.Tool(function_declarations=[weather_declaration, loan_declaration]))
 
-                config = types.GenerateContentConfig(tools=tools_list) if tools_list else None
+            config = types.GenerateContentConfig(tools=tools_list) if tools_list else None
 
-            # Execution
-            with st.chat_message("assistant"):
-                message_placeholder = st.empty()
-                tool_used_label = "None"
-                generated_image_obj = None
-                
-                # Check for explicit image generation triggers in user input
-                if any(k in user_input.lower() for k in ["generate image", "draw", "create picture", "generate an image"]):
-                    try:
-                        generated_image_obj = generate_imagen_art(user_input)
-                        tool_used_label = "`Imagen 3`"
-                        ai_output = f"Generated image based on prompt: *\"{user_input}\"*"
-                        st.image(generated_image_obj, caption="Imagen 3", use_container_width=True)
-                    except Exception as e:
-                        ai_output = f"Imagen Generation Error: {str(e)}"
-                        message_placeholder.markdown(ai_output)
-                else:
-                    try:
-                        response = client.models.generate_content(
-                            model=GEMINI_MODEL,
-                            contents=prompt_sent,
-                            config=config
-                        )
+        # Execution
+        with st.chat_message("assistant"):
+            message_placeholder = st.empty()
+            tool_used_label = "None"
+            generated_image_obj = None
+            
+            # Check for explicit image generation triggers in user input
+            if any(k in user_input.lower() for k in ["generate image", "draw", "create picture", "generate an image"]):
+                try:
+                    generated_image_obj = generate_imagen_art(user_input)
+                    tool_used_label = "`Imagen 3`"
+                    ai_output = f"Generated image based on prompt: *\"{user_input}\"*"
+                    st.image(generated_image_obj, caption="Imagen 3", use_container_width=True)
+                except Exception as e:
+                    ai_output = f"Imagen Generation Error: {str(e)}"
+                    message_placeholder.markdown(ai_output)
+            else:
+                try:
+                    response = client.models.generate_content(
+                        model=GEMINI_MODEL,
+                        contents=prompt_sent,
+                        config=config
+                    )
+                    
+                    if response.function_calls:
+                        call = response.function_calls[0]
+                        fn_name = call.name
+                        fn_args = call.args
+                        tool_used_label = f"`{fn_name}()`"
                         
-                        if response.function_calls:
-                            call = response.function_calls[0]
-                            fn_name = call.name
-                            fn_args = call.args
-                            tool_used_label = f"`{fn_name}()`"
-                            
-                            if fn_name in AVAILABLE_FUNCTIONS:
-                                tool_result = AVAILABLE_FUNCTIONS[fn_name](**fn_args)
-                                followup_response = client.models.generate_content(
-                                    model=GEMINI_MODEL,
-                                    contents=[
-                                        prompt_sent,
-                                        response.candidates[0].content,
-                                        types.Part.from_function_response(
-                                            name=fn_name,
-                                            response={"result": tool_result}
-                                        )
-                                    ]
-                                )
-                                ai_output = followup_response.text
-                            else:
-                                ai_output = response.text
+                        if fn_name in AVAILABLE_FUNCTIONS:
+                            tool_result = AVAILABLE_FUNCTIONS[fn_name](**fn_args)
+                            followup_response = client.models.generate_content(
+                                model=GEMINI_MODEL,
+                                contents=[
+                                    prompt_sent,
+                                    response.candidates[0].content,
+                                    types.Part.from_function_response(
+                                        name=fn_name,
+                                        response={"result": tool_result}
+                                    )
+                                ]
+                            )
+                            ai_output = followup_response.text
                         else:
                             ai_output = response.text
+                    else:
+                        ai_output = response.text
 
-                        message_placeholder.markdown(ai_output)
+                    message_placeholder.markdown(ai_output)
 
-                    except Exception as e:
-                        ai_output = f"Error: {str(e)}"
-                        message_placeholder.markdown(ai_output)
+                except Exception as e:
+                    ai_output = f"Error: {str(e)}"
+                    message_placeholder.markdown(ai_output)
 
-            # TTS Audio Generation
-            audio_bytes = None
-            try:
-                tts = gTTS(text=ai_output, lang=TTS_LANG_MAP.get(target_language, 'en'))
-                fp = io.BytesIO()
-                tts.write_to_fp(fp)
-                audio_bytes = fp.getvalue()
-            except Exception:
-                pass
+        # TTS Audio Generation
+        audio_bytes = None
+        try:
+            tts = gTTS(text=ai_output, lang=TTS_LANG_MAP.get(target_language, 'en'))
+            fp = io.BytesIO()
+            tts.write_to_fp(fp)
+            audio_bytes = fp.getvalue()
+        except Exception:
+            pass
 
-            metadata = f"🧠 **{detected_lang}** ({confidence:.1f}%) | 📁 Workspace: `{st.session_state.active_workspace}` | 🔧 Tool Called: {tool_used_label}"
-            st.session_state.messages.append({
-                "role": "assistant", 
-                "content": ai_output, 
-                "generated_image": generated_image_obj,
-                "metadata": metadata,
-                "audio": audio_bytes
-            })
-            st.rerun()
+        metadata = f"🧠 **{detected_lang}** ({confidence:.1f}%) | 📁 Workspace: `{st.session_state.active_workspace}` | 🔧 Tool Called: {tool_used_label}"
+        st.session_state.messages.append({
+            "role": "assistant", 
+            "content": ai_output, 
+            "generated_image": generated_image_obj,
+            "metadata": metadata,
+            "audio": audio_bytes
+        })
+        st.rerun()
