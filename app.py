@@ -10,7 +10,6 @@ import tensorflow as tf
 from tensorflow.keras.preprocessing.sequence import pad_sequences
 from google import genai
 from google.genai import types
-from gTTS import gTTS
 import faiss
 from PIL import Image
 import pypdf
@@ -18,6 +17,13 @@ import docx
 import pptx
 from documents import KNOWLEDGE_DOCUMENTS
 from guardrails import validate_user_input
+
+# Optional audio output dependency
+try:
+    from gTTS import gTTS
+    HAS_GTTS = True
+except ImportError:
+    HAS_GTTS = False
 
 # Page Config
 st.set_page_config(page_title="BAOBAB AI", page_icon="🌳", layout="wide")
@@ -50,7 +56,7 @@ st.markdown("""
         border-right: 1px solid #e9ecef;
     }
 
-    /* Fixed Bottom Dock Container - Tightened to fit all screens */
+    /* Fixed Bottom Dock Container */
     div[data-testid="stHorizontalBlock"]:has(div.gemini-dock-marker) {
         position: fixed;
         bottom: 20px;
@@ -562,15 +568,16 @@ RESPONSE ({target_language}):"""
                             ai_output = f"Error: {str(e)}"
                         message_placeholder.markdown(ai_output)
 
-            # TTS Audio Generation
+            # TTS Audio Generation with fallback safety
             audio_bytes = None
-            try:
-                tts = gTTS(text=ai_output, lang=TTS_LANG_MAP.get(target_language, 'en'))
-                fp = io.BytesIO()
-                tts.write_to_fp(fp)
-                audio_bytes = fp.getvalue()
-            except Exception:
-                pass
+            if HAS_GTTS:
+                try:
+                    tts = gTTS(text=ai_output, lang=TTS_LANG_MAP.get(target_language, 'en'))
+                    fp = io.BytesIO()
+                    tts.write_to_fp(fp)
+                    audio_bytes = fp.getvalue()
+                except Exception:
+                    pass
 
             metadata = f"🧠 **{detected_lang}** ({confidence:.1f}%) | 📁 Workspace: `{st.session_state.active_workspace}` | 🔧 Tool Called: {tool_used_label}"
             st.session_state.messages.append({
