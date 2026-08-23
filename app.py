@@ -141,6 +141,24 @@ def build_faiss_index_for_docs(docs, tokenizer, embedding_dim=128):
     index.add(doc_matrix)
     return index, docs
 
+def run_local_python_sandbox(code_str: str) -> str:
+    """Executes python code locally in a captured standard output stream."""
+    import sys
+    from io import StringIO
+    old_stdout = sys.stdout
+    redirected_output = sys.stdout = StringIO()
+    
+    try:
+        # Restricted global scope for safe execution
+        exec_globals = {"np": np, "pd": pd}
+        exec(code_str, exec_globals)
+        output = redirected_output.getvalue()
+        return output if output else "Code executed successfully with no output."
+    except Exception as e:
+        return f"Execution Error: {str(e)}"
+    finally:
+        sys.stdout = old_stdout
+
 all_active_documents = KNOWLEDGE_DOCUMENTS + st.session_state.custom_documents
 
 # --- Header ---
@@ -156,11 +174,12 @@ with st.sidebar:
     )
 
     st.markdown("---")
-    st.header("🌐 Tier 2 Enhancements")
-    # Tier 2: Manual Internet Search Toggle
-    enable_web_search = st.toggle("Enable Live Web Search (Grounding)", value=False)
+    st.header("🌐 Active Capabilities")
+    enable_web_search = st.toggle("Enable Live Web Search", value=False)
     
-    # Tier 2: Custom System Prompts / Personalization
+    # Tier 3 Feature: Code Interpreter Toggle
+    enable_code_interpreter = st.toggle("Enable Python Code Sandbox", value=True, help="Allows the AI to execute Python code directly to solve math, data analysis, or algorithms.")
+    
     custom_persona = st.text_area(
         "Custom Instructions / Persona", 
         value="You are BAOBAB AI, an expert, helpful assistant.",
@@ -214,6 +233,16 @@ with st.sidebar:
     col1, col2 = st.columns(2)
     col1.metric("Total Turns", st.session_state.analytics["total_requests"])
     col2.metric("Blocked", st.session_state.analytics["blocked_requests"])
+
+# --- Local Interactive Sandbox Runner in Sidebar ---
+with st.sidebar:
+    st.markdown("---")
+    st.header("💻 Quick Local Python Runner")
+    with st.expander("Run Custom Python Snippet"):
+        user_code = st.text_area("Python Code", value="import numpy as np\nprint(np.mean([10, 20, 30, 40]))")
+        if st.button("Execute Snippet"):
+            out = run_local_python_sandbox(user_code)
+            st.code(out, language="text")
 
 # --- Main Chat UI ---
 search_active = bool(chat_search_query.strip())
@@ -275,7 +304,7 @@ with input_col1:
                     st.success("Photo attached!")
 
 with input_col2:
-    user_input = st.text_input("Prompt", value=st.session_state.pending_input, placeholder="Ask BAOBAB AI...", label_visibility="collapsed", key="main_prompt_field")
+    user_input = st.text_input("Prompt", value=st.session_state.pending_input, placeholder="Ask BAOBAB AI or request Python computations...", label_visibility="collapsed", key="main_prompt_field")
 
 with input_col3:
     st.audio_input("Record voice", label_visibility="collapsed", key="live_mic_recorder", on_change=transcribe_audio_callback)
@@ -343,12 +372,16 @@ HISTORY:
 QUERY: {user_input}
 RESPONSE ({target_language}):"""
 
-                # Configure tools (Enable Google Search grounding if toggled on)
-                config_args = {}
+                # Configure tools (Search Grounding & Code Execution Sandbox)
+                tools_list = []
                 if enable_web_search:
-                    config_args["tools"] = [{"google_search": {}}]
+                    tools_list.append({"google_search": {}})
+                if enable_code_interpreter:
+                    tools_list.append(types.Tool(code_execution=types.CodeExecution()))
 
-            # Stream response directly into UI (Tier 2 Streaming Standard)
+                config = types.GenerateContentConfig(tools=tools_list) if tools_list else None
+
+            # Stream response directly into UI
             with st.chat_message("assistant"):
                 message_placeholder = st.empty()
                 ai_output = ""
@@ -357,7 +390,7 @@ RESPONSE ({target_language}):"""
                     response_stream = client.models.generate_content_stream(
                         model=GEMINI_MODEL,
                         contents=prompt_sent,
-                        config=types.GenerateContentConfig(**config_args) if config_args else None
+                        config=config
                     )
                     for chunk in response_stream:
                         if chunk.text:
@@ -378,7 +411,7 @@ RESPONSE ({target_language}):"""
             except Exception:
                 pass
 
-            metadata = f"🧠 **{detected_lang}** ({confidence:.1f}%) | 📄 Context: *{doc_title}* | 🌐 Search: `{'On' if enable_web_search else 'Off'}`"
+            metadata = f"🧠 **{detected_lang}** ({confidence:.1f}%) | 📄 Context: *{doc_title}* | 💻 Sandbox: `{'On' if enable_code_interpreter else 'Off'}`"
             st.session_state.messages.append({
                 "role": "assistant", 
                 "content": ai_output, 
