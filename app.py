@@ -53,6 +53,12 @@ if "analytics" not in st.session_state:
 if "custom_documents" not in st.session_state:
     st.session_state.custom_documents = []
 
+if "workspaces" not in st.session_state:
+    st.session_state.workspaces = ["General", "Coding", "Legal", "Academic"]
+
+if "active_workspace" not in st.session_state:
+    st.session_state.active_workspace = "General"
+
 if "pending_input" not in st.session_state:
     st.session_state.pending_input = ""
 
@@ -149,7 +155,6 @@ def run_local_python_sandbox(code_str: str) -> str:
     redirected_output = sys.stdout = StringIO()
     
     try:
-        # Restricted global scope for safe execution
         exec_globals = {"np": np, "pd": pd}
         exec(code_str, exec_globals)
         output = redirected_output.getvalue()
@@ -159,7 +164,14 @@ def run_local_python_sandbox(code_str: str) -> str:
     finally:
         sys.stdout = old_stdout
 
-all_active_documents = KNOWLEDGE_DOCUMENTS + st.session_state.custom_documents
+# Tag base knowledge documents with workspace context
+tagged_base_docs = []
+for doc in KNOWLEDGE_DOCUMENTS:
+    doc_copy = doc.copy()
+    doc_copy["workspace"] = doc.get("workspace", "General")
+    tagged_base_docs.append(doc_copy)
+
+all_active_documents = tagged_base_docs + st.session_state.custom_documents
 
 # --- Header ---
 st.title("🌳 BAOBAB AI")
@@ -174,11 +186,33 @@ with st.sidebar:
     )
 
     st.markdown("---")
+    st.header("📂 Knowledge Workspaces (Tier 3)")
+    
+    # Active Workspace Selector
+    st.session_state.active_workspace = st.selectbox(
+        "Active Workspace",
+        st.session_state.workspaces,
+        index=st.session_state.workspaces.index(st.session_state.active_workspace) if st.session_state.active_workspace in st.session_state.workspaces else 0
+    )
+
+    # Add New Custom Workspace
+    new_ws = st.text_input("Create Workspace", placeholder="e.g. Finance")
+    if st.button("➕ Create Workspace") and new_ws.strip():
+        ws_clean = new_ws.strip().title()
+        if ws_clean not in st.session_state.workspaces:
+            st.session_state.workspaces.append(ws_clean)
+            st.session_state.active_workspace = ws_clean
+            st.success(f"Workspace **{ws_clean}** created!")
+            st.rerun()
+
+    # Filtered Document Count
+    active_docs_in_ws = [d for d in all_active_documents if d.get("workspace", "General") == st.session_state.active_workspace]
+    st.caption(f"📚 Documents in **{st.session_state.active_workspace}**: **{len(active_docs_in_ws)}**")
+
+    st.markdown("---")
     st.header("🌐 Active Capabilities")
     enable_web_search = st.toggle("Enable Live Web Search", value=False)
-    
-    # Tier 3 Feature: Code Interpreter Toggle
-    enable_code_interpreter = st.toggle("Enable Python Code Sandbox", value=True, help="Allows the AI to execute Python code directly to solve math, data analysis, or algorithms.")
+    enable_code_interpreter = st.toggle("Enable Python Code Sandbox", value=True)
     
     custom_persona = st.text_area(
         "Custom Instructions / Persona", 
@@ -205,7 +239,8 @@ with st.sidebar:
         if st.session_state.messages:
             save_payload = {
                 "messages": [{k: v for k, v in msg.items() if k != "audio"} for msg in st.session_state.messages],
-                "analytics": st.session_state.analytics
+                "analytics": st.session_state.analytics,
+                "workspace": st.session_state.active_workspace
             }
             with open(os.path.join(SAVES_DIR, f"{session_name.strip()}.json"), "w", encoding="utf-8") as f:
                 json.dump(save_payload, f, indent=2)
@@ -221,6 +256,8 @@ with st.sidebar:
                     loaded_data = json.load(f)
                 st.session_state.messages = loaded_data.get("messages", [])
                 st.session_state.analytics = loaded_data.get("analytics", st.session_state.analytics)
+                if "workspace" in loaded_data and loaded_data["workspace"] in st.session_state.workspaces:
+                    st.session_state.active_workspace = loaded_data["workspace"]
                 st.rerun()
 
     if st.button("🗑️ Clear Chat"):
@@ -277,6 +314,7 @@ with input_col1:
         tab_file, tab_photo = st.tabs(["📄 Upload", "📷 Camera"])
         with tab_file:
             uploaded_file = st.file_uploader("Upload File", type=["txt", "pdf", "docx", "pptx", "jpg", "jpeg", "png"], key="attachment_file")
+            upload_workspace = st.selectbox("Assign Workspace", st.session_state.workspaces, index=st.session_state.workspaces.index(st.session_state.active_workspace), key="file_ws")
             upload_category = st.text_input("Category", value="Custom Knowledge", key="file_cat")
             if st.button("📥 Attach File", key="btn_attach_file") and uploaded_file:
                 ext_text = extract_text_from_file(uploaded_file, client_gemini=client)
@@ -284,12 +322,14 @@ with input_col1:
                     st.session_state.custom_documents.append({
                         "id": len(all_active_documents) + 1,
                         "title": uploaded_file.name,
+                        "workspace": upload_workspace,
                         "category": upload_category.strip() or "Custom Knowledge",
                         "text": ext_text
                     })
-                    st.success(f"Attached **{uploaded_file.name}**!")
+                    st.success(f"Attached **{uploaded_file.name}** to **{upload_workspace}**!")
         with tab_photo:
             camera_image = st.camera_input("Take photo", key="attachment_cam")
+            photo_workspace = st.selectbox("Assign Workspace", st.session_state.workspaces, index=st.session_state.workspaces.index(st.session_state.active_workspace), key="cam_ws")
             photo_category = st.text_input("Category", value="Custom Knowledge", key="cam_cat")
             if st.button("📥 Attach Scan", key="btn_attach_cam") and camera_image:
                 img = Image.open(camera_image)
@@ -298,13 +338,14 @@ with input_col1:
                     st.session_state.custom_documents.append({
                         "id": len(all_active_documents) + 1,
                         "title": f"Scan_{int(time.time())}.jpg",
+                        "workspace": photo_workspace,
                         "category": photo_category.strip() or "Custom Knowledge",
                         "text": ext_text
                     })
-                    st.success("Photo attached!")
+                    st.success(f"Photo attached to **{photo_workspace}**!")
 
 with input_col2:
-    user_input = st.text_input("Prompt", value=st.session_state.pending_input, placeholder="Ask BAOBAB AI or request Python computations...", label_visibility="collapsed", key="main_prompt_field")
+    user_input = st.text_input("Prompt", value=st.session_state.pending_input, placeholder=f"Ask BAOBAB AI [{st.session_state.active_workspace}]...", label_visibility="collapsed", key="main_prompt_field")
 
 with input_col3:
     st.audio_input("Record voice", label_visibility="collapsed", key="live_mic_recorder", on_change=transcribe_audio_callback)
@@ -335,11 +376,13 @@ if send_pressed:
                 confidence = float(np.max(preds)) * 100
                 st.session_state.analytics["bilstm_latencies"].append(round((time.perf_counter() - t0_bilstm) * 1000, 2))
 
-                # FAISS Retrieval
+                # Partitioned FAISS Retrieval (Strictly within active workspace)
                 t0_faiss = time.perf_counter()
                 embedding_dim = 128
-                active_faiss_index, active_docs = build_faiss_index_for_docs(all_active_documents, tokenizer, embedding_dim)
-                rag_context, doc_title = "No relevant document found.", "None"
+                workspace_docs = [d for d in all_active_documents if d.get("workspace", "General") == st.session_state.active_workspace]
+                
+                active_faiss_index, active_docs = build_faiss_index_for_docs(workspace_docs, tokenizer, embedding_dim)
+                rag_context, doc_title = f"No relevant document found in workspace '{st.session_state.active_workspace}'.", "None"
                 
                 if active_faiss_index is not None:
                     q_vec = np.zeros(embedding_dim, dtype='float32')
@@ -362,8 +405,9 @@ if send_pressed:
 {custom_persona}
 Detected Input Language: {detected_lang} (Confidence: {confidence:.1f}%).
 TARGET OUTPUT LANGUAGE: Compose your response strictly in {target_language}.
+CURRENT WORKSPACE: {st.session_state.active_workspace}
 
-RETRIEVED CONTEXT:
+RETRIEVED WORKSPACE CONTEXT:
 {rag_context}
 
 HISTORY:
@@ -411,7 +455,7 @@ RESPONSE ({target_language}):"""
             except Exception:
                 pass
 
-            metadata = f"🧠 **{detected_lang}** ({confidence:.1f}%) | 📄 Context: *{doc_title}* | 💻 Sandbox: `{'On' if enable_code_interpreter else 'Off'}`"
+            metadata = f"🧠 **{detected_lang}** ({confidence:.1f}%) | 📁 Workspace: `{st.session_state.active_workspace}` | 📄 Doc: *{doc_title}*"
             st.session_state.messages.append({
                 "role": "assistant", 
                 "content": ai_output, 
