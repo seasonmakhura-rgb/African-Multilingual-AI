@@ -29,7 +29,7 @@ except ImportError:
 st.set_page_config(page_title="BAOBAB AI", page_icon="🌳", layout="wide")
 
 # Target Model Identifiers
-GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_MODEL = "gemini-3.6-flash"
 IMAGEN_MODEL = "imagen-3.0-generate-002"
 
 SAVES_DIR = "saved_chats"
