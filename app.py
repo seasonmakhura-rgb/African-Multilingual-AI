@@ -38,6 +38,74 @@ TTS_LANG_MAP = {
     'Spanish': 'es'
 }
 
+# --- Tier 4: Executable External Tool Definitions ---
+def get_current_weather(location: str) -> str:
+    """Fetches real-time structured weather reports for a city or region."""
+    # Simulated weather tool response
+    loc_clean = location.strip().title()
+    weather_db = {
+        "Luanda": {"temp": "29°C", "condition": "Sunny", "humidity": "74%"},
+        "Maputo": {"temp": "26°C", "condition": "Partly Cloudy", "humidity": "68%"},
+        "Nairobi": {"temp": "22°C", "condition": "Clear", "humidity": "55%"},
+        "Johannesburg": {"temp": "21°C", "condition": "Mild", "humidity": "40%"},
+        "Lisbon": {"temp": "24°C", "condition": "Sunny", "humidity": "60%"},
+    }
+    data = weather_db.get(loc_clean, {"temp": "25°C", "condition": "Clear", "humidity": "50%"})
+    return json.dumps({"location": loc_clean, **data})
+
+def calculate_loan_repayment(principal: float, annual_rate: float, duration_years: int) -> str:
+    """Calculates monthly payment and total interest for a fixed-rate loan."""
+    monthly_rate = (annual_rate / 100) / 12
+    total_months = duration_years * 12
+    if monthly_rate == 0:
+        monthly_payment = principal / total_months
+    else:
+        monthly_payment = principal * (monthly_rate * (1 + monthly_rate)**total_months) / ((1 + monthly_rate)**total_months - 1)
+    total_payment = monthly_payment * total_months
+    total_interest = total_payment - principal
+    
+    return json.dumps({
+        "principal": principal,
+        "annual_rate_percent": annual_rate,
+        "duration_years": duration_years,
+        "monthly_payment": round(monthly_payment, 2),
+        "total_interest": round(total_interest, 2),
+        "total_payment": round(total_payment, 2)
+    })
+
+# Map functions to their callable implementations
+AVAILABLE_FUNCTIONS = {
+    "get_current_weather": get_current_weather,
+    "calculate_loan_repayment": calculate_loan_repayment
+}
+
+# Declarations for Gemini Tool Schema
+weather_declaration = types.FunctionDeclaration(
+    name="get_current_weather",
+    description="Get current weather details for a specific city or region.",
+    parameters=types.Schema(
+        type="OBJECT",
+        properties={
+            "location": types.Schema(type="STRING", description="The city and state/country, e.g. Luanda, Maputo, Nairobi")
+        },
+        required=["location"]
+    )
+)
+
+loan_declaration = types.FunctionDeclaration(
+    name="calculate_loan_repayment",
+    description="Calculate monthly loan repayments, total interest, and total payout.",
+    parameters=types.Schema(
+        type="OBJECT",
+        properties={
+            "principal": types.Schema(type="NUMBER", description="The total loan principal amount"),
+            "annual_rate": types.Schema(type="NUMBER", description="Annual interest rate percentage, e.g. 7.5"),
+            "duration_years": types.Schema(type="INTEGER", description="Loan period in years")
+        },
+        required=["principal", "annual_rate", "duration_years"]
+    )
+)
+
 # Initialize State
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -205,7 +273,6 @@ with st.sidebar:
             st.success(f"Workspace **{ws_clean}** created!")
             st.rerun()
 
-    # Filtered Document Count
     active_docs_in_ws = [d for d in all_active_documents if d.get("workspace", "General") == st.session_state.active_workspace]
     st.caption(f"📚 Documents in **{st.session_state.active_workspace}**: **{len(active_docs_in_ws)}**")
 
@@ -213,6 +280,7 @@ with st.sidebar:
     st.header("🌐 Active Capabilities")
     enable_web_search = st.toggle("Enable Live Web Search", value=False)
     enable_code_interpreter = st.toggle("Enable Python Code Sandbox", value=True)
+    enable_function_calling = st.toggle("Enable API Tool Calling (Tier 4)", value=True, help="Allows AI to invoke external functions (Weather, Loan Calculator).")
     
     custom_persona = st.text_area(
         "Custom Instructions / Persona", 
@@ -416,31 +484,59 @@ HISTORY:
 QUERY: {user_input}
 RESPONSE ({target_language}):"""
 
-                # Configure tools (Search Grounding & Code Execution Sandbox)
+                # Configure tools (Search Grounding, Python Code Execution, & Function Calling)
                 tools_list = []
                 if enable_web_search:
                     tools_list.append({"google_search": {}})
                 if enable_code_interpreter:
                     tools_list.append(types.Tool(code_execution=types.CodeExecution()))
+                if enable_function_calling:
+                    tools_list.append(types.Tool(function_declarations=[weather_declaration, loan_declaration]))
 
                 config = types.GenerateContentConfig(tools=tools_list) if tools_list else None
 
-            # Stream response directly into UI
+            # Execution with Dynamic Function Dispatching
             with st.chat_message("assistant"):
                 message_placeholder = st.empty()
-                ai_output = ""
+                tool_used_label = "None"
                 
                 try:
-                    response_stream = client.models.generate_content_stream(
+                    response = client.models.generate_content(
                         model=GEMINI_MODEL,
                         contents=prompt_sent,
                         config=config
                     )
-                    for chunk in response_stream:
-                        if chunk.text:
-                            ai_output += chunk.text
-                            message_placeholder.markdown(ai_output + "▌")
+                    
+                    # Handle Tool Function Calls from Gemini
+                    if response.function_calls:
+                        call = response.function_calls[0]
+                        fn_name = call.name
+                        fn_args = call.args
+                        tool_used_label = f"`{fn_name}()`"
+                        
+                        if fn_name in AVAILABLE_FUNCTIONS:
+                            tool_result = AVAILABLE_FUNCTIONS[fn_name](**fn_args)
+                            
+                            # Feed Tool Execution Result back to Gemini for final response synthesis
+                            followup_response = client.models.generate_content(
+                                model=GEMINI_MODEL,
+                                contents=[
+                                    prompt_sent,
+                                    response.candidates[0].content,
+                                    types.Part.from_function_response(
+                                        name=fn_name,
+                                        response={"result": tool_result}
+                                    )
+                                ]
+                            )
+                            ai_output = followup_response.text
+                        else:
+                            ai_output = response.text
+                    else:
+                        ai_output = response.text
+
                     message_placeholder.markdown(ai_output)
+
                 except Exception as e:
                     ai_output = f"Error: {str(e)}"
                     message_placeholder.markdown(ai_output)
@@ -455,7 +551,7 @@ RESPONSE ({target_language}):"""
             except Exception:
                 pass
 
-            metadata = f"🧠 **{detected_lang}** ({confidence:.1f}%) | 📁 Workspace: `{st.session_state.active_workspace}` | 📄 Doc: *{doc_title}*"
+            metadata = f"🧠 **{detected_lang}** ({confidence:.1f}%) | 📁 Workspace: `{st.session_state.active_workspace}` | 🔧 Tool Called: {tool_used_label}"
             st.session_state.messages.append({
                 "role": "assistant", 
                 "content": ai_output, 
