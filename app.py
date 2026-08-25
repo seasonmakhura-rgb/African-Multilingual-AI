@@ -523,7 +523,7 @@ RESPONSE ({target_language}):"""
                     has_builtin = True
                 
                 if enable_code_interpreter:
-                    tools_list.append(types.Tool(code_execution=types.CodeExecution()))
+                    tools_list.append(types.Tool(code_execution={}))
 
                 if enable_function_calling:
                     tools_list.append(types.Tool(function_declarations=[weather_declaration, loan_declaration]))
