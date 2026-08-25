@@ -18,17 +18,17 @@ import pptx
 from documents import KNOWLEDGE_DOCUMENTS
 from guardrails import validate_user_input
 
-# Optional audio output dependency
+# --- Optional Audio Output Dependency ---
 try:
     from gTTS import gTTS
     HAS_GTTS = True
 except ImportError:
     HAS_GTTS = False
 
-# Page Config
+# --- Page Config ---
 st.set_page_config(page_title="BAOBAB AI", page_icon="🌳", layout="wide")
 
-# Target Model Identifiers
+# --- Target Model Identifiers ---
 GEMINI_MODEL = "gemini-3.6-flash"
 IMAGEN_MODEL = "imagen-3.0-generate-002"
 
@@ -43,7 +43,7 @@ TTS_LANG_MAP = {
     'Spanish': 'es'
 }
 
-# --- CSS Styling for Responsive Dock Bar & Clean Sidebar ---
+# --- Custom Styling for Input Dock & Sidebar ---
 st.markdown("""
 <style>
     .block-container {
@@ -198,7 +198,7 @@ loan_declaration = types.FunctionDeclaration(
     )
 )
 
-# Initialize Session State
+# --- Initialize Session State ---
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
@@ -258,24 +258,29 @@ def extract_text_from_file(uploaded_file, client_gemini=None):
         return response.text.strip()
     return ""
 
+# --- Safe Resource Loading ---
 @st.cache_resource
 def load_system_resources():
-    model = tf.keras.models.load_model('african_lang_classifier.keras')
-    with open('word_tokenizer.pkl', 'rb') as f:
-        tokenizer = pickle.load(f)
-    with open('label_encoder.pkl', 'rb') as f:
-        label_encoder = pickle.load(f)
-    return model, tokenizer, label_encoder
+    try:
+        model = tf.keras.models.load_model('african_lang_classifier.keras')
+        with open('word_tokenizer.pkl', 'rb') as f:
+            tokenizer = pickle.load(f)
+        with open('label_encoder.pkl', 'rb') as f:
+            label_encoder = pickle.load(f)
+        return model, tokenizer, label_encoder
+    except Exception as e:
+        st.error(f"⚠️ Error loading NLP resources: {e}")
+        return None, None, None
 
 model, tokenizer, label_encoder = load_system_resources()
 
-def build_faiss_index_for_docs(docs, tokenizer, embedding_dim=128):
-    if not docs:
+def build_faiss_index_for_docs(docs, tokenizer_obj, embedding_dim=128):
+    if not docs or tokenizer_obj is None:
         return None, []
     np.random.seed(42)
     doc_vectors = []
     for doc in docs:
-        seq = tokenizer.texts_to_sequences([doc['text']])
+        seq = tokenizer_obj.texts_to_sequences([doc['text']])
         vec = np.zeros(embedding_dim, dtype='float32')
         if seq[0]:
             for idx in seq[0][:embedding_dim]:
@@ -308,10 +313,12 @@ with st.sidebar:
 
     st.markdown("---")
     st.subheader("🌐 Output Language")
+    available_languages = list(label_encoder.classes_) if label_encoder is not None else ["English", "Portuguese", "French", "Swahili", "Spanish"]
+    default_lang_idx = available_languages.index("Portuguese") if "Portuguese" in available_languages else 0
     target_language = st.selectbox(
         "Select Response Language", 
-        sorted(label_encoder.classes_), 
-        index=sorted(label_encoder.classes_).index("Portuguese") if "Portuguese" in label_encoder.classes_ else 0,
+        sorted(available_languages), 
+        index=default_lang_idx,
         label_visibility="collapsed"
     )
 
@@ -455,11 +462,15 @@ if send_clicked or (user_prompt and user_prompt != st.session_state.last_process
             
             with st.spinner("Processing..."):
                 t0_bilstm = time.perf_counter()
-                seq = tokenizer.texts_to_sequences([user_input])
-                padded = pad_sequences(seq, maxlen=50)
-                preds = model.predict(padded)
-                detected_lang = label_encoder.inverse_transform([np.argmax(preds)])[0]
-                confidence = float(np.max(preds)) * 100
+                detected_lang = "English"
+                confidence = 100.0
+
+                if model is not None and tokenizer is not None and label_encoder is not None:
+                    seq = tokenizer.texts_to_sequences([user_input])
+                    padded = pad_sequences(seq, maxlen=50)
+                    preds = model.predict(padded)
+                    detected_lang = label_encoder.inverse_transform([np.argmax(preds)])[0]
+                    confidence = float(np.max(preds)) * 100
                 st.session_state.analytics["bilstm_latencies"].append(round((time.perf_counter() - t0_bilstm) * 1000, 2))
 
                 t0_faiss = time.perf_counter()
@@ -469,7 +480,8 @@ if send_clicked or (user_prompt and user_prompt != st.session_state.last_process
                 active_faiss_index, active_docs = build_faiss_index_for_docs(workspace_docs, tokenizer, embedding_dim)
                 rag_context, doc_title = f"No relevant document found in workspace '{st.session_state.active_workspace}'.", "None"
                 
-                if active_faiss_index is not None:
+                if active_faiss_index is not None and tokenizer is not None:
+                    seq = tokenizer.texts_to_sequences([user_input])
                     q_vec = np.zeros(embedding_dim, dtype='float32')
                     if seq[0]:
                         for idx in seq[0][:embedding_dim]:
@@ -511,7 +523,7 @@ RESPONSE ({target_language}):"""
 
                 config = types.GenerateContentConfig(tools=tools_list) if tools_list else None
 
-            # Generate Content safely with Quota Exhaustion handling
+            # Generate Content safely
             with st.chat_message("assistant"):
                 message_placeholder = st.empty()
                 tool_used_label = "None"
@@ -568,7 +580,7 @@ RESPONSE ({target_language}):"""
                             ai_output = f"Error: {str(e)}"
                         message_placeholder.markdown(ai_output)
 
-            # TTS Audio Generation with fallback safety
+            # TTS Audio Generation
             audio_bytes = None
             if HAS_GTTS:
                 try:
