@@ -524,12 +524,13 @@ RESPONSE ({target_language}):"""
                 
                 if enable_code_interpreter:
                     tools_list.append(types.Tool(code_execution={}))
+                    has_builtin = True
 
                 if enable_function_calling:
                     tools_list.append(types.Tool(function_declarations=[weather_declaration, loan_declaration]))
                     has_custom = True
 
-                # Enable server-side tool invocations when combining built-in and function calling tools
+                # Enable server-side tool invocations when combining built-in tools and function calling
                 tool_config_obj = None
                 if has_builtin and has_custom:
                     tool_config_obj = types.ToolConfig(include_server_side_tool_invocations=True)
