@@ -513,15 +513,31 @@ HISTORY:
 QUERY: {user_input}
 RESPONSE ({target_language}):"""
 
+                # --- Safe Tool Configuration ---
                 tools_list = []
+                has_builtin = False
+                has_custom = False
+
                 if enable_web_search:
-                    tools_list.append({"google_search": {}})
+                    tools_list.append(types.Tool(google_search=types.GoogleSearch()))
+                    has_builtin = True
+                
                 if enable_code_interpreter:
-                    tools_list.append({"code_execution": {}})
+                    tools_list.append(types.Tool(code_execution=types.CodeExecution()))
+
                 if enable_function_calling:
                     tools_list.append(types.Tool(function_declarations=[weather_declaration, loan_declaration]))
+                    has_custom = True
 
-                config = types.GenerateContentConfig(tools=tools_list) if tools_list else None
+                # Enable server-side tool invocations when combining built-in and function calling tools
+                tool_config_obj = None
+                if has_builtin and has_custom:
+                    tool_config_obj = types.ToolConfig(include_server_side_tool_invocations=True)
+
+                config = types.GenerateContentConfig(
+                    tools=tools_list if tools_list else None,
+                    tool_config=tool_config_obj
+                )
 
             # Generate Content safely
             with st.chat_message("assistant"):
