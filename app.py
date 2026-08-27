@@ -6,8 +6,8 @@ from google import genai
 from google.genai import types
 
 # Page Configuration
-st.set_page_config(page_title="Multilingual AI Assistant", page_icon="🌍", layout="centered")
-st.title("🌍 Multilingual AI Assistant")
+st.set_page_config(page_title="BaoBab", page_icon="🌍", layout="centered")
+st.title("🌍 BaoBab")
 
 # Cache resources to prevent reloading on every user interaction
 @st.cache_resource
