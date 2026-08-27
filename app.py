@@ -3,6 +3,7 @@ import pickle
 import numpy as np
 import streamlit as st
 from google import genai
+from google.genai import types
 
 # Page Configuration
 st.set_page_config(page_title="Multilingual AI Assistant", page_icon="🌍", layout="centered")
@@ -63,11 +64,18 @@ with tab_audio:
             with st.spinner("Transcribing audio input via Gemini..."):
                 try:
                     audio_bytes = audio_file.read()
+                    
+                    # Convert audio bytes into proper Part type for google-genai SDK
+                    audio_part = types.Part.from_bytes(
+                        data=audio_bytes,
+                        mime_type="audio/wav"
+                    )
+                    
                     transcribe_response = client.models.generate_content(
                         model='gemini-2.5-flash',
                         contents=[
                             "Transcribe the following spoken audio verbatim into text. Return only the raw text response.",
-                            {"mime_type": "audio/wav", "data": audio_bytes}
+                            audio_part
                         ]
                     )
                     user_input = transcribe_response.text.strip()
