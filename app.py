@@ -6,8 +6,8 @@ from google import genai
 from google.genai import types
 
 # Page Configuration
-st.set_page_config(page_title="BaoBab", page_icon="🌍", layout="centered")
-st.title("🌍 BaoBab")
+st.set_page_config(page_title="Multilingual AI Assistant", page_icon="🌍", layout="centered")
+st.title("🌍 Multilingual AI Assistant")
 
 # Cache resources to prevent reloading on every user interaction
 @st.cache_resource
@@ -72,7 +72,7 @@ with tab_audio:
                     )
                     
                     transcribe_response = client.models.generate_content(
-                        model='gemini-1.5-flash',
+                        model='gemini-3.6-flash',
                         contents=[
                             "Transcribe the following spoken audio verbatim into text. Return only the raw text response.",
                             audio_part
@@ -112,7 +112,7 @@ if user_input:
     if client:
         try:
             response = client.models.generate_content(
-                model='gemini-1.5-flash',
+                model='gemini-3.6-flash',
                 contents=f"{system_instruction}\n\nUser Message: {user_input}"
             )
             bot_reply = response.text
