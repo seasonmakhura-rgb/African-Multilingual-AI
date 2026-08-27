@@ -72,7 +72,7 @@ with tab_audio:
                     )
                     
                     transcribe_response = client.models.generate_content(
-                        model='gemini-2.5-flash',
+                        model='gemini-1.5-flash',
                         contents=[
                             "Transcribe the following spoken audio verbatim into text. Return only the raw text response.",
                             audio_part
@@ -112,7 +112,7 @@ if user_input:
     if client:
         try:
             response = client.models.generate_content(
-                model='gemini-2.5-flash',
+                model='gemini-1.5-flash',
                 contents=f"{system_instruction}\n\nUser Message: {user_input}"
             )
             bot_reply = response.text
