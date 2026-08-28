@@ -4,7 +4,7 @@ import google.generativeai as genai
 
 # 1. Load your exact ML pipeline artifacts
 vectorizer = joblib.load("tfidf_vectorizer.pkl")
-model = joblib.load("african_lang_model.pkl")
+model = joblib.load("african_classification.pkl")
 label_encoder = joblib.load("label_encoder.pkl")
 
 def predict_language(text):
@@ -21,7 +21,8 @@ def predict_language(text):
     
     return language_name, confidence
 
-# 2. Conversational UI Layout
+# 2. Conversational UI Layout Setup
+st.set_page_config(page_title="Baobab AI", page_icon="🌍")
 st.title("Baobab AI - Multilingual Assistant")
 
 # Maintain persistent chat thread
@@ -36,7 +37,7 @@ for message in st.session_state.messages:
 # 3. Chat Input Loop
 if prompt := st.chat_input("Type your message..."):
     
-    # Render user prompt in chat
+    # Render user prompt in chat window
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
@@ -44,11 +45,13 @@ if prompt := st.chat_input("Type your message..."):
     # Step A: Run on-device classification using your loaded artifacts
     detected_lang, confidence = predict_language(prompt)
 
-    # Step B: Generate conversational response via Gemini forced into the detected language
+    # Step B: Configure Gemini using gemini-3.6-flash
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    gemini_model = genai.GenerativeModel("gemini-1.5-flash")
+    gemini_model = genai.GenerativeModel("gemini-3.6-flash")
     
     system_prompt = f"The user is speaking {detected_lang}. Respond to them conversationally, accurately, and fluently in {detected_lang}."
+    
+    # Generate response
     response = gemini_model.generate_content(f"{system_prompt}\nUser message: {prompt}")
 
     # Step C: Render assistant reply with language metadata tag
