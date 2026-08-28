@@ -2,7 +2,19 @@ import streamlit as st
 import pickle
 import numpy as np
 import google.generativeai as genai
-from your_model_file import predict_language  # Your trained ML model
+import joblib
+
+# Load your saved vectorizer and model pipeline
+vectorizer = joblib.load("tfidf_vectorizer.pkl")
+model = joblib.load("saga_model.pkl")
+
+def predict_language(text):
+    # Vectorize and predict
+    vec_text = vectorizer.transform([text])
+    prediction = model.predict(vec_text)[0]
+    probs = model.predict_proba(vec_text)
+    confidence = float(max(probs[0]) * 100)
+    return prediction, confidence
 
 
 # Set Streamlit Page Config
