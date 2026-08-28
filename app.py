@@ -1,6 +1,9 @@
 import streamlit as st
 import pickle
 import numpy as np
+import google.generativeai as genai
+from your_model_file import predict_language  # Your trained ML model
+
 
 # Set Streamlit Page Config
 st.set_page_config(
@@ -48,46 +51,40 @@ LANG_NAMES = {
     'yor': 'Yoruba (Èdè Yorùbá)'
 }
 
-# ==========================================
-# 2. STREAMLIT USER INTERFACE
-# ==========================================
-st.title("🌍 African Language Classifier")
-st.write("Enter text in any supported African language to detect its origin and confidence score.")
+import streamlit as st
+import google.generativeai as genai
+from your_model_file import predict_language  # Your trained ML model
 
-user_input = st.text_area(
-    "Input Text:",
-    height=150,
-    placeholder="e.g., Habari gani rafiki wangu or Ina kwana da fatan ka tashi lafiya..."
-)
+st.title("Baobab AI - Multilingual Assistant")
 
-if st.button("Detect Language", type="primary"):
-    if not user_input.strip():
-        st.warning("Please enter some text to classify.")
-    else:
-        # Preprocess & Vectorize
-        text_vec = vectorizer.transform([user_input.lower()])
-        
-        # Predict Probabilities
-        probabilities = model.predict_proba(text_vec)[0]
-        top_idx = np.argmax(probabilities)
-        top_confidence = probabilities[top_idx] * 100
-        predicted_code = label_encoder.classes_[top_idx]
-        display_name = LANG_NAMES.get(predicted_code, predicted_code.upper())
-        
-        # Output Main Result
-        st.markdown("---")
-        st.subheader("Classification Result")
-        st.metric(label="Predicted Language", value=display_name)
-        st.progress(float(probabilities[top_idx]))
-        st.write(f"**Confidence:** `{top_confidence:.2f}%`")
-        
-        # Display Top 3 Predictions Breakdown
-        st.markdown("---")
-        st.subheader("Top Prediction Probabilities")
-        top_3_indices = np.argsort(probabilities)[-3:][::-1]
-        
-        for idx in top_3_indices:
-            code = label_encoder.classes_[idx]
-            name = LANG_NAMES.get(code, code.upper())
-            score = probabilities[idx] * 100
-            st.write(f"- **{name}**: `{score:.2f}%`")
+# 1. Initialize persistent chat history
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+# 2. Render previous conversation thread
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+
+# 3. Capture user chat input (replacing the single form button)
+if prompt := st.chat_input("Ask a question in your language..."):
+    # Display user's message
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
+
+    # Step A: Run YOUR model to identify the language instantly
+    detected_lang, confidence = predict_language(prompt)
+
+    # Step B: Generate conversational response (e.g., via Gemini)
+    # Using system instruction to force response in the detected language
+    model = genai.GenerativeModel("gemini-1.5-flash")
+    system_instruction = f"The user is speaking {detected_lang}. Reply back accurately in {detected_lang}."
+    
+    response = model.generate_content(f"{system_instruction}\nUser prompt: {prompt}")
+
+    # Step C: Display Assistant response + metadata tag
+    bot_reply = f"*(Detected: {detected_lang} - {confidence:.1f}% confidence)*\n\n{response.text}"
+    with st.chat_message("assistant"):
+        st.markdown(bot_reply)
+    st.session_state.messages.append({"role": "assistant", "content": bot_reply})
