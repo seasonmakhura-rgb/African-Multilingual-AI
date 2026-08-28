@@ -1,13 +1,4 @@
 streamlit
-tensorflow
-google-genai
-gTTS
-faiss-cpu
-pillow
-pypdf
-python-docx
-python-pptx
-pandas
-numpy
+joblib
 scikit-learn
-nltk
+google-generativeai
