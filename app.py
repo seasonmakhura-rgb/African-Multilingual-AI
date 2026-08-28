@@ -2,9 +2,9 @@ import joblib
 import streamlit as st
 import google.generativeai as genai
 
-# 1. Load your exact ML pipeline artifacts
+# 1. Load exact ML artifacts from your repository
 vectorizer = joblib.load("tfidf_vectorizer.pkl")
-model = joblib.load("african_classification.pkl")
+model = joblib.load("african_lang_model.pkl")
 label_encoder = joblib.load("label_encoder.pkl")
 
 def predict_language(text):
